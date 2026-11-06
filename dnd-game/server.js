@@ -7,9 +7,12 @@ const express = require('express');
 const { Server } = require('socket.io');
 const ai = require('./ai');
 const themes = require('./themes');
+const { DIFFICULTY, level } = require('./difficulty');
 
 const app = express();
 app.use(express.static(path.join(__dirname, 'public')));
+// Three.js for the 3D map (served from node_modules, no CDN needed).
+app.use('/vendor/three', express.static(path.join(__dirname, 'node_modules', 'three')));
 app.get('/health', (_req, res) => res.json({ ok: true, rooms: rooms.size }));
 app.get('/config', (_req, res) => res.json({ aiAvailable: ai.available(), themeCards: require('./themes').CARDS }));
 app.get('/ai-check', async (_req, res) => res.json(await ai.check()));
@@ -99,6 +102,7 @@ function defaultSettings(presetKey = 'classic') {
     requireApproval: true, // DM must approve every action before a roll
     playersCanFreeRoll: true,
     houseRules: '',
+    difficulty: 'normal',
   };
 }
 
@@ -187,7 +191,11 @@ function checkEnding(room) {
 
 // Effects the AI may request in its JSON (all validated here).
 function applyAIEffects(room, out) {
-  for (const h of out.hpChanges || []) applyHp(room, [h]);
+  const mul = level(room.settings.difficulty).dmg;
+  for (const h of out.hpChanges || []) {
+    const delta = h.delta < 0 ? Math.min(-1, Math.round(h.delta * mul)) : h.delta;
+    applyHp(room, [{ ...h, delta }]);
+  }
   for (const t of out.trackerChanges || []) {
     const tr = room.trackers.find((x) => x.id === t.id);
     if (tr) setTracker(room, tr.id, tr.value + t.delta);
@@ -245,6 +253,7 @@ function viewFor(room, viewerId) {
     canGM: isDM || (room.dmMode === 'ai' && viewerId === room.hostId),
     aiDM: room.aiDM,
     aiStyles: AI_STYLES,
+    difficulties: Object.fromEntries(Object.entries(DIFFICULTY).map(([k, v]) => [k, { label: v.label, dc: v.dc, defaultDC: v.defaultDC }])),
     themeCards: themes.CARDS,
   };
 }
@@ -332,7 +341,8 @@ function aiReview(room, action) {
     if (action.status !== 'pending') return;
     const r = await ai.reviewAction(room, action);
     if (action.status !== 'pending') return;
-    applyReview(room, action, { ...r, decision: r.decision === 'roll' ? 'approve' : r.decision });
+    const [lo, hi] = level(room.settings.difficulty).dc;
+    applyReview(room, action, { ...r, dc: Math.max(lo, Math.min(hi, r.dc)), decision: r.decision === 'roll' ? 'approve' : r.decision });
     if (r.decision !== 'roll' && r.narration) addLog(room, { kind: 'narrate', text: r.narration });
   });
 }
@@ -476,6 +486,10 @@ io.on('connection', (socket) => {
       questions: [],
       log: [],
     };
+    if (DIFFICULTY[payload.difficulty]) {
+      r.settings.difficulty = payload.difficulty;
+      r.settings.defaultDC = level(payload.difficulty).defaultDC;
+    }
     applyTheme(r, clip(payload.themeId, 20) || 'custom', { name: clip(payload.worldName, 60), lore: clip(payload.worldLore, LIMITS.scene) });
     if (r.dmMode === 'ai' && !r.world.opening) r.scene = { title: 'บทนำ', text: 'AI DM จะเริ่มเรื่องเมื่อเจ้าของห้องกด "ให้ AI สร้างฉากใหม่"' };
     rooms.set(code, r);
@@ -547,6 +561,11 @@ io.on('connection', (socket) => {
       if (typeof p[k] === 'boolean') s[k] = p[k];
     }
     if (p.houseRules !== undefined) s.houseRules = clip(p.houseRules, LIMITS.scene);
+    if (DIFFICULTY[p.difficulty] && p.difficulty !== s.difficulty) {
+      s.difficulty = p.difficulty;
+      s.defaultDC = level(p.difficulty).defaultDC;
+      addLog(room, { kind: 'system', text: `🎚️ ระดับความยากเปลี่ยนเป็น ${level(p.difficulty).label}` });
+    }
   }));
 
   socket.on('set_scene', guard('dm', (p) => {

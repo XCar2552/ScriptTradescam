@@ -325,3 +325,12 @@ body.is-dm .player-only { display: none !important; }
 .chip-opt.on { background: var(--primary); border-color: var(--primary); }
 .upload-btn { display: flex; align-items: center; justify-content: center; }
 .modal-foot { position: sticky; bottom: 0; background: var(--card); padding-top: 8px; }
+
+/* ---------- 3D map ---------- */
+.map-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.map-head h2 { margin: 0; }
+.seg.mini { margin: 0; }
+.seg.mini button { padding: 4px 12px; font-size: .8rem; }
+.map3d-host, .map3d { width: 100%; height: 62vw; max-height: 420px; min-height: 240px; border-radius: 12px; overflow: hidden; position: relative; background: #1f5d96; }
+.map3d canvas { width: 100% !important; height: 100% !important; display: block; touch-action: none; }
+.map-loading { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font-size: .9rem; }

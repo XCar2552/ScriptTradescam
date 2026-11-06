@@ -9,6 +9,9 @@
   <link rel="icon" href="icon.svg" type="image/svg+xml" />
   <title>D20 Tavern</title>
   <link rel="stylesheet" href="style.css" />
+  <script type="importmap">
+    { "imports": { "three": "/vendor/three/build/three.module.js", "three/addons/": "/vendor/three/examples/jsm/" } }
+  </script>
 </head>
 <body>
   <!-- ========== HOME ========== -->
@@ -44,6 +47,14 @@
           <option value="classic">D&amp;D คลาสสิก (6 ค่าสถานะ)</option>
           <option value="simple">D20 แบบง่าย (ไม่มีค่าสถานะ)</option>
           <option value="custom">กำหนดเอง (ตั้งค่าสถานะเอง)</option>
+        </select>
+      </label>
+      <label class="field">🎚️ ระดับความยาก
+        <select id="difficultyInput">
+          <option value="easy">😊 ง่าย — ใจดี ให้คำใบ้บ่อย ดาเมจครึ่งเดียว</option>
+          <option value="normal" selected>🙂 ปกติ — สมดุล ยุติธรรม</option>
+          <option value="hard">😤 ยาก — ศัตรูฉลาด ดาเมจ ×1.5</option>
+          <option value="nightmare">💀 นรก — โหดสุด ไม่มีคำใบ้ ดาเมจ ×2</option>
         </select>
       </label>
       <label class="field">ใครเป็น DM
@@ -213,6 +224,8 @@
             <input id="setStats" maxlength="200" placeholder="พลัง, ความไว, สมอง" />
           </label>
           <label class="field">ธีม/โลก <select id="setTheme"></select></label>
+          <label class="field">🎚️ ระดับความยาก <select id="setDifficulty"></select></label>
+          <p class="muted small" id="diffHint"></p>
           <label class="field">ค่าความยาก (DC) เริ่มต้น
             <input id="setDC" type="number" min="1" max="40" inputmode="numeric" />
           </label>

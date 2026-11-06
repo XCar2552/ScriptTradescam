@@ -51,7 +51,7 @@ ai.setProvider(async (system, prompt, kind) => {
   await wait(150);
   let a = p1.state.actions.find((x) => x.text === 'Sneak past the ghost');
   assert.equal(a.status, 'approved');
-  assert.equal(a.dc, 40);
+  assert.equal(a.dc, 20); // AI asked for 99, clamped to the "normal" difficulty max
   assert.equal(a.mode, 'adv');
   p1.emit('roll_action', { actionId: a.id });
   await wait(200);

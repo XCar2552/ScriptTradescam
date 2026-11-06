@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node test/smoke.js && node test/ai.js && node test/gemini-fallback.js && node test/world.js && node test/avatar.js"
+    "test": "node test/smoke.js && node test/ai.js && node test/gemini-fallback.js && node test/world.js && node test/avatar.js && node test/difficulty.js"
   },
   "engines": {
     "node": ">=18"
@@ -13,7 +13,8 @@
   "license": "MIT",
   "dependencies": {
     "express": "^4.22.3",
-    "socket.io": "^4.8.4"
+    "socket.io": "^4.8.4",
+    "three": "^0.187.0"
   },
   "devDependencies": {
     "socket.io-client": "^4.8.4"

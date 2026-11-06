@@ -131,7 +131,7 @@
     const name = getName();
     if (name) {
       enter(await emit('create_room', {
-        name, playerId, preset: $('#presetInput').value, dmMode: $('#dmModeInput').value,
+        name, playerId, preset: $('#presetInput').value, dmMode: $('#dmModeInput').value, difficulty: $('#difficultyInput').value,
         themeId: pickedTheme, worldName: $('#worldNameInput').value, worldLore: $('#worldLoreInput').value,
       }));
     }
@@ -184,6 +184,7 @@
     $$('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === t));
     $$('.pane').forEach((p) => p.classList.toggle('active', p.dataset.pane === t));
     if (t === 'ask') seenQuestions = S?.questions.length || 0;
+    map3d?.setActive(t === 'world');
     if (t === 'dm') fillSettings(true);
     if (t === 'dm' && S && !S.isHost && !S.isDM) return setTab('story');
     if (t === 'char') charFilled = false;
@@ -588,6 +589,7 @@
 
     $('#rulesSummary').innerHTML = `<ul>
       <li>รูปแบบ: <b>${esc(S.presets[s.preset])}</b> · โลก: ${esc(s.theme)}</li>
+      <li>ระดับความยาก: <b>${S.difficulties?.[s.difficulty]?.label || '-'}</b></li>
       <li>ทอย <b>D20</b> ${s.stats.length ? '+ โบนัสจากค่าสถานะ' : ''} แล้วต้องได้ ≥ <b>DC</b> ถึงจะสำเร็จ (DC ปกติ ${s.defaultDC})</li>
       ${s.statMode === 'score' ? '<li>โบนัสค่าสถานะ = (ค่า − 10) ÷ 2 ปัดลง</li>' : ''}
       ${s.critRules ? '<li>ทอยได้ 20 เป๊ะ = สำเร็จขั้นสุด · ได้ 1 = พลาดขั้นสุด</li>' : ''}
@@ -639,6 +641,9 @@
     $('#setStats').value = s.stats.join(', ');
     $('#customStatsField').classList.toggle('hidden', s.preset !== 'custom');
     $('#setDC').value = s.defaultDC;
+    $('#setDifficulty').innerHTML = Object.entries(S.difficulties || {}).map(([k, d]) => `<option value="${k}" ${k === s.difficulty ? 'selected' : ''}>${d.label}</option>`).join('');
+    const dd = S.difficulties?.[s.difficulty];
+    $('#diffHint').textContent = dd ? `ช่วง DC ${dd.dc[0]}–${dd.dc[1]} · ${S.dmMode === 'ai' ? 'AI DM จะเล่นตามระดับนี้ และระบบบังคับ DC/ดาเมจให้อยู่ในกรอบ' : 'เปลี่ยนแล้ว DC เริ่มต้นจะปรับให้อัตโนมัติ'}` : '';
     $('#setCrit').checked = s.critRules;
     $('#setAdv').checked = s.allowAdvantage;
     $('#setApproval').checked = s.requireApproval;
@@ -663,6 +668,7 @@
       requireApproval: $('#setApproval').checked,
       playersCanFreeRoll: $('#setFreeRoll').checked,
       houseRules: $('#setHouse').value,
+      difficulty: $('#setDifficulty').value,
     });
     settingsDirty = false;
     toast('บันทึกระบบเกมแล้ว');
@@ -746,6 +752,7 @@
     const canTravel = isl && isl.id !== S.location && (S.isDM || S.dmMode === 'ai');
     const v = (k) => esc(wd[k] ?? '');
     const npcs = isl ? w.npcs.filter((n) => n.island === isl.id) : [];
+    const use3d = mapMode === '3d' && !map3dFailed;
     const html = `
       <div class="world-banner">${D20Art.banner(w.themeId)}<div class="world-title"><b>${w.emoji} ${esc(w.name)}</b><span>${esc(w.genre)}</span></div></div>
       ${S.ending ? `<div class="card ending-card ${S.ending.type}"><b>${S.ending.type === 'win' ? '🏆 ชนะแล้ว!' : '💀 พ่ายแพ้'}</b> ${esc(S.ending.text)}</div>` : ''}
@@ -776,8 +783,10 @@
           <div class="row"><select data-key="t:lose" data-w="t:lose"><option value="">ไม่มีผลแพ้</option><option value="zero" ${wd['t:lose'] === 'zero' ? 'selected' : ''}>แพ้เมื่อเหลือ 0</option><option value="max" ${wd['t:lose'] === 'max' ? 'selected' : ''}>แพ้เมื่อเต็ม</option></select>
           <button class="btn primary small" data-act="trackerAdd">เพิ่ม</button></div></details>` : ''}</div>` : ''}
 
-      ${w.islands.length ? `<div class="card"><h2>🗺️ แผนที่เส้นทาง</h2>${mapSVG(w)}
-        <p class="muted small">แตะเกาะเพื่อดูรายละเอียด · ⛵ = ตำแหน่งปัจจุบัน · ❔ = ยังไม่เคยไป</p></div>` : ''}
+      ${w.islands.length ? `<div class="card"><div class="map-head"><h2>🗺️ แผนที่โลก</h2>
+          <div class="seg mini"><button data-mapmode="3d" class="${use3d ? 'on' : ''}" ${map3dFailed ? 'disabled' : ''}>3D</button><button data-mapmode="2d" class="${use3d ? '' : 'on'}">2D</button></div></div>
+        ${use3d ? '<div id="map3dHost" class="map3d-host"><div class="map-loading">กำลังโหลดแผนที่ 3D...</div></div>' : mapSVG(w)}
+        <p class="muted small">${use3d ? 'ลากนิ้วเพื่อหมุน · ถ่างนิ้วเพื่อซูม · แตะเกาะเพื่อดูรายละเอียด' : 'แตะเกาะเพื่อดูรายละเอียด'} · ⛵ = ตำแหน่งปัจจุบัน · ❔ = ยังไม่เคยไป</p></div>` : ''}
 
       ${isl ? `<div class="card place">
         <div class="place-head"><span class="place-emoji">${isl.unknown && !S.isDM ? '❔' : isl.emoji}</span><div>
@@ -804,6 +813,35 @@
       ${w.roles?.length ? `<details class="card" ${det('roles')}><summary><b>🧭 บทบาทลูกเรือ</b></summary>${w.roles.map((r) => `<div class="landmark"><b>${r.icon} ${esc(r.name)}</b><span class="small muted">${esc(r.desc)} · โบนัส ${Object.entries(r.bonus).map(([k, x]) => `${esc(k)} +${x}`).join(', ')}</span></div>`).join('')}</details>` : ''}
       ${w.powers ? `<details class="card" ${det('powers')}><summary><b>💎 ${esc(w.powers.title)}</b></summary><p class="small">${esc(w.powers.rule)}</p>${w.powers.list.map((x) => `<div class="landmark"><b>${x.icon} ${esc(x.name)}</b><span class="small muted">${esc(x.desc)}</span></div>`).join('')}</details>` : ''}`;
     patch(box, html);
+    attachMap3d(w);
+  }
+
+  // ---------- 3D map (loaded on demand; falls back to 2D if WebGL fails) ----------
+  let mapMode = store.get('d20.map') || '3d';
+  let map3d = null;
+  let map3dEl = null;
+  let map3dFailed = false;
+  let map3dLoading = false;
+  function attachMap3d(w) {
+    const host = $('#map3dHost');
+    if (!host) { map3d?.setActive(false); return; }
+    if (!map3d) {
+      if (map3dLoading) return;
+      map3dLoading = true;
+      import('/map3d.js')
+        .then((m) => {
+          map3dEl = document.createElement('div');
+          map3dEl.className = 'map3d';
+          map3d = m.create(map3dEl, { onPick: (id) => { selIsland = id; renderWorld(); } });
+        })
+        .catch((e) => { console.warn('3D map unavailable:', e); map3dFailed = true; })
+        .finally(() => { map3dLoading = false; renderWorld(); });
+      return;
+    }
+    host.innerHTML = '';
+    host.appendChild(map3dEl);
+    map3d.update({ islands: w.islands, location: S.location, isDM: S.isDM, selected: selIsland });
+    map3d.setActive(tab === 'world');
   }
 
   $('#worldView').addEventListener('toggle', (e) => {
@@ -817,6 +855,8 @@
     if (t.dataset.goal) socket.emit('goal_toggle', { id: t.dataset.goal });
   });
   $('#worldView').addEventListener('click', (e) => {
+    const mm = e.target.closest('[data-mapmode]');
+    if (mm) { mapMode = mm.dataset.mapmode; store.set('d20.map', mapMode); renderWorld(); return; }
     const isl = e.target.closest('[data-island]');
     if (isl) { selIsland = isl.dataset.island; renderWorld(); return; }
     const b = e.target.closest('button');

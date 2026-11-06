@@ -1,4 +1,5 @@
 // AI Dungeon Master powered by Google Gemini (free tier works).
+const { level } = require('./difficulty');
 // Set GEMINI_API_KEY in the server environment. Optional: GEMINI_MODEL.
 // AI_MOCK=1 uses canned answers (for local testing without a key).
 
@@ -131,7 +132,10 @@ function systemPrompt(room) {
     'คุณคือ Dungeon Master (DM) ของเกมเล่นตามบทบาทแนว D&D ที่ใช้ลูกเต๋า D20',
     room.aiDM ? `ชื่อของคุณคือ "${room.aiDM.name}" สไตล์การเล่าเรื่อง: ${room.aiDM.style}${room.aiDM.persona ? `. บุคลิกเพิ่มเติม: ${room.aiDM.persona}` : ''} — เล่าเรื่องด้วยน้ำเสียงนี้เสมอ` : '',
     `ธีม/โลกของเกม: ${s.theme}. รูปแบบกติกา: ${s.preset}. ${statsLine}.`,
-    `DC มาตรฐาน: ง่าย 8-10, ปกติ ${s.defaultDC}, ยาก 15-17, ยากมาก 18-20, แทบเป็นไปไม่ได้ 22+.`,
+    (() => {
+      const d = level(s.difficulty);
+      return `ระดับความยากของเกม: ${d.label} — ${d.ai}. ช่วง DC ที่ใช้ได้: ${d.dc[0]}-${d.dc[1]} (ง่ายสุด ${d.dc[0]}, ปกติ ${d.defaultDC}, ยากสุด ${d.dc[1]}).`;
+    })(),
     s.houseRules ? `กติกาเพิ่มเติมของห้อง: ${s.houseRules}` : '',
     'หน้าที่: เล่าเรื่องให้สนุก มีชีวิตชีวา ให้ผู้เล่นมีอิสระ แต่ต้องยุติธรรมและสมเหตุสมผลกับสถานการณ์',
     'ห้ามตัดสินผลลูกเต๋าเอง ระบบจะทอยให้ คุณแค่กำหนด DC และเล่าผลตามผลที่ได้',
