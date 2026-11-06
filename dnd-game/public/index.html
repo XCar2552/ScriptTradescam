@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#16131f" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <title>D20 Tavern</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- ========== HOME ========== -->
+  <section id="home" class="screen active">
+    <div class="hero">
+      <div class="d20-logo">20</div>
+      <h1>D20 Tavern</h1>
+      <p class="muted">ผจญภัยด้วยลูกเต๋า 20 หน้า — สร้างห้อง ชวนเพื่อน แล้วเล่นได้เลย</p>
+    </div>
+
+    <label class="field">ชื่อของคุณ
+      <input id="nameInput" maxlength="40" placeholder="เช่น บียอนด์" autocomplete="nickname" />
+    </label>
+
+    <div class="card">
+      <h2>🎲 เข้าห้อง (ผู้เล่น)</h2>
+      <label class="field">รหัสห้อง
+        <input id="codeInput" maxlength="8" placeholder="ABCDE" autocapitalize="characters" class="code-input" />
+      </label>
+      <button id="joinBtn" class="btn primary block">เข้าร่วม</button>
+    </div>
+
+    <div class="card">
+      <h2>👑 สร้างห้อง (เป็น DM)</h2>
+      <label class="field">รูปแบบเกม
+        <select id="presetInput">
+          <option value="classic">D&amp;D คลาสสิก (6 ค่าสถานะ)</option>
+          <option value="simple">D20 แบบง่าย (ไม่มีค่าสถานะ)</option>
+          <option value="custom">กำหนดเอง (ตั้งค่าสถานะเอง)</option>
+        </select>
+      </label>
+      <button id="createBtn" class="btn gold block">สร้างห้อง</button>
+    </div>
+
+    <div id="resumeBox" class="card hidden">
+      <p>มีห้องเดิมค้างอยู่: <b id="resumeCode"></b></p>
+      <button id="resumeBtn" class="btn block">กลับเข้าห้องเดิม</button>
+    </div>
+  </section>
+
+  <!-- ========== GAME ========== -->
+  <section id="game" class="screen">
+    <header class="topbar">
+      <button id="codeChip" class="chip" title="แชร์รหัสห้อง">ห้อง <b id="roomCode"></b> 📋</button>
+      <span id="themeChip" class="chip ghost"></span>
+      <span id="roleChip" class="chip"></span>
+      <button id="leaveBtn" class="icon-btn" title="ออกจากห้อง">🚪</button>
+    </header>
+
+    <main id="panes">
+      <!-- STORY -->
+      <div class="pane active" data-pane="story">
+        <div class="scene card">
+          <div class="scene-title" id="sceneTitle"></div>
+          <div class="scene-text" id="sceneText"></div>
+        </div>
+        <div id="log" class="log"></div>
+        <form id="chatForm" class="composer">
+          <input id="chatInput" maxlength="600" placeholder="พูดคุยในกลุ่ม..." />
+          <button class="btn primary">ส่ง</button>
+        </form>
+      </div>
+
+      <!-- ACTIONS -->
+      <div class="pane" data-pane="act">
+        <div id="declareBox" class="card">
+          <h2>⚔️ คุณจะทำอะไร?</h2>
+          <textarea id="actionInput" rows="3" maxlength="600" placeholder="พิมพ์ได้อิสระ เช่น ‘ปีนกำแพงไปแอบดูในหน้าต่าง’"></textarea>
+          <div class="row">
+            <select id="actionStat"></select>
+            <button id="actionSend" class="btn primary">ส่งให้ DM</button>
+          </div>
+          <p class="muted small" id="declareHint"></p>
+        </div>
+        <h3 class="section-title" id="actListTitle">การกระทำ</h3>
+        <div id="actionList"></div>
+      </div>
+
+      <!-- CHARACTER / PARTY -->
+      <div class="pane" data-pane="char">
+        <div id="charSheet"></div>
+        <h3 class="section-title">ปาร์ตี้</h3>
+        <div id="partyList"></div>
+      </div>
+
+      <!-- DICE -->
+      <div class="pane" data-pane="dice">
+        <div class="card">
+          <h2>🎲 ทอยเต๋าอิสระ</h2>
+          <div class="dice-grid" id="diceGrid"></div>
+          <div class="row">
+            <label class="field tight">จำนวน<input id="diceCount" type="number" min="1" max="20" value="1" inputmode="numeric" /></label>
+            <label class="field tight">โบนัส<input id="diceMod" type="number" min="-50" max="50" value="0" inputmode="numeric" /></label>
+          </div>
+          <div class="row" id="advRow">
+            <label class="toggle"><input type="radio" name="diceMode" value="normal" checked /> ปกติ</label>
+            <label class="toggle"><input type="radio" name="diceMode" value="adv" /> ได้เปรียบ</label>
+            <label class="toggle"><input type="radio" name="diceMode" value="dis" /> เสียเปรียบ</label>
+          </div>
+          <input id="diceLabel" maxlength="60" placeholder="ทอยเพื่อ... (ไม่ใส่ก็ได้)" />
+          <label class="toggle dm-only"><input type="checkbox" id="diceHidden" /> ทอยลับ (เห็นแค่ DM)</label>
+          <p class="muted small" id="diceHint"></p>
+        </div>
+      </div>
+
+      <!-- ASK DM -->
+      <div class="pane" data-pane="ask">
+        <div class="card player-only">
+          <h2>❓ ถาม DM</h2>
+          <textarea id="askInput" rows="2" maxlength="600" placeholder="เช่น ‘ในห้องนี้มีทางออกกี่ทาง?’ หรือถามกติกาได้เลย"></textarea>
+          <div class="row">
+            <label class="toggle"><input type="checkbox" id="askPrivate" /> ถามแบบส่วนตัว</label>
+            <button id="askSend" class="btn primary">ส่งคำถาม</button>
+          </div>
+        </div>
+        <div class="card" id="houseRulesCard">
+          <h2>📜 กติกาของห้องนี้</h2>
+          <div id="rulesSummary" class="rules"></div>
+        </div>
+        <div id="questionList"></div>
+      </div>
+
+      <!-- DM CONTROL -->
+      <div class="pane" data-pane="dm">
+        <div class="card">
+          <h2>🎬 ตั้งฉาก / สถานการณ์</h2>
+          <input id="sceneTitleInput" maxlength="80" placeholder="ชื่อฉาก เช่น ‘ถ้ำมังกรหลับ’" />
+          <textarea id="sceneTextInput" rows="4" maxlength="2000" placeholder="บรรยายสิ่งที่ผู้เล่นเห็น ได้ยิน รู้สึก..."></textarea>
+          <button id="sceneSend" class="btn gold block">ตั้งเป็นฉากปัจจุบัน</button>
+        </div>
+        <div class="card">
+          <h2>🗣️ บรรยาย / ให้คำแนะนำ</h2>
+          <textarea id="narrateInput" rows="2" maxlength="600" placeholder="เช่น ‘เสียงฝีเท้าดังมาจากทางเดินด้านซ้าย…’"></textarea>
+          <button id="narrateSend" class="btn primary block">ส่งคำบรรยาย</button>
+        </div>
+        <div class="card">
+          <h2>⚙️ ระบบเกม</h2>
+          <label class="field">รูปแบบเกม <select id="setPreset"></select></label>
+          <label class="field" id="customStatsField">ค่าสถานะ (คั่นด้วย ,)
+            <input id="setStats" maxlength="200" placeholder="พลัง, ความไว, สมอง" />
+          </label>
+          <label class="field">ธีม/โลก <select id="setTheme"></select></label>
+          <label class="field">ค่าความยาก (DC) เริ่มต้น
+            <input id="setDC" type="number" min="1" max="40" inputmode="numeric" />
+          </label>
+          <label class="toggle"><input type="checkbox" id="setCrit" /> ทอยได้ 20 = สำเร็จขั้นสุด / 1 = พลาดขั้นสุด</label>
+          <label class="toggle"><input type="checkbox" id="setAdv" /> อนุญาตได้เปรียบ/เสียเปรียบ (ทอย 2 ลูก)</label>
+          <label class="toggle"><input type="checkbox" id="setApproval" /> ทุกการกระทำต้องให้ DM อนุมัติก่อน</label>
+          <label class="toggle"><input type="checkbox" id="setFreeRoll" /> ผู้เล่นทอยเต๋าอิสระได้</label>
+          <label class="field">กติกาเพิ่มเติม (ผู้เล่นทุกคนเห็น)
+            <textarea id="setHouse" rows="3" maxlength="2000" placeholder="เช่น ‘ตายเมื่อ HP = 0’, ‘ห้ามใช้เวทเกิน 3 ครั้งต่อวัน’"></textarea>
+          </label>
+          <button id="settingsSave" class="btn gold block">บันทึกระบบเกม</button>
+        </div>
+      </div>
+    </main>
+
+    <nav class="tabs" id="tabs">
+      <button data-tab="story" class="active"><span>📖</span>เรื่องราว</button>
+      <button data-tab="act"><span>⚔️</span>การกระทำ<i class="badge" id="actBadge"></i></button>
+      <button data-tab="char"><span>🧙</span>ตัวละคร</button>
+      <button data-tab="dice"><span>🎲</span>ทอยเต๋า</button>
+      <button data-tab="ask"><span>❓</span>ถาม DM<i class="badge" id="askBadge"></i></button>
+      <button data-tab="dm" class="dm-only"><span>👑</span>DM</button>
+    </nav>
+  </section>
+
+  <!-- Dice animation overlay -->
+  <div id="diceOverlay" class="overlay hidden">
+    <div class="die" id="dieFace">20</div>
+    <div class="die-caption" id="dieCaption"></div>
+    <div class="die-outcome" id="dieOutcome"></div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
