@@ -2,7 +2,12 @@
 // Set GEMINI_API_KEY in the server environment. Optional: GEMINI_MODEL.
 // AI_MOCK=1 uses canned answers (for local testing without a key).
 
-const MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest';
+// Models are tried in order. If one is overloaded (503), over quota (429) or missing (404),
+// the next is used. GEMINI_MODEL can be a comma-separated list to override.
+const MODELS = (process.env.GEMINI_MODEL || 'gemini-flash-latest,gemini-flash-lite-latest,gemini-2.5-flash,gemini-2.5-flash-lite')
+  .split(',').map((m) => m.trim()).filter(Boolean);
+let MODEL = MODELS[0];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const TIMEOUT_MS = 45000;
 
 class AIError extends Error {
@@ -21,14 +26,14 @@ function setProvider(fn) {
   customProvider = fn;
 }
 
-async function gemini(system, prompt) {
+async function geminiOnce(model, system, prompt) {
   const key = (process.env.GEMINI_API_KEY || '').trim();
   if (!key) throw new AIError('nokey', 'ยังไม่ได้ใส่ GEMINI_API_KEY ในเซิร์ฟเวอร์');
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
   let res;
   try {
-    res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(MODEL)}:generateContent`, {
+    res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
       body: JSON.stringify({
@@ -47,7 +52,8 @@ async function gemini(system, prompt) {
     clearTimeout(t);
   }
   if (res.status === 429) throw new AIError('quota', 'โควตา AI ฟรีเต็มชั่วคราว');
-  if (res.status === 404) throw new AIError('model', `ไม่พบโมเดล ${MODEL} — ตั้ง GEMINI_MODEL ใหม่`);
+  if (res.status === 404) throw new AIError('model', `ไม่พบโมเดล ${model}`);
+  if (res.status >= 500) throw new AIError('busy', `Gemini คนใช้เยอะ ระบบเต็มชั่วคราว (${res.status})`);
   if (res.status === 400 || res.status === 403) {
     const body = await res.text().catch(() => '');
     console.error('Gemini error', res.status, body.slice(0, 300));
@@ -59,6 +65,30 @@ async function gemini(system, prompt) {
   const data = await res.json();
   const text = data?.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
   return parseJSON(text);
+}
+
+// Try the last model that worked first, retry overloaded models, then fall back.
+async function gemini(system, prompt) {
+  const order = [MODEL, ...MODELS.filter((m) => m !== MODEL)];
+  let lastErr;
+  for (const model of order) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const out = await geminiOnce(model, system, prompt);
+        if (MODEL !== model) console.log('AI now using model', model);
+        MODEL = model;
+        return out;
+      } catch (e) {
+        lastErr = e;
+        if (e.code === 'busy' || (e.code === 'network' && /ช้าเกินไป/.test(e.message) === false)) {
+          if (attempt === 0) { await sleep(1500); continue; }
+        }
+        break; // quota / model missing / bad output -> next model; key problems stop below
+      }
+    }
+    if (lastErr?.code === 'nokey') throw lastErr;
+  }
+  throw lastErr;
 }
 
 function parseJSON(text) {
@@ -207,6 +237,7 @@ async function check() {
     keyStartsWithAIza: key.startsWith('AIza'),
     keyLength: key.length,
     model: MODEL,
+    fallbackModels: MODELS,
     nodeVersion: process.version,
   };
   if (!key) return { ...info, ok: false, error: 'ยังไม่ได้ใส่ GEMINI_API_KEY ใน Render → Environment' };
@@ -214,11 +245,11 @@ async function check() {
   lastCheck = Date.now();
   try {
     const out = await gemini('ตอบเป็น JSON เท่านั้น', 'ตอบ {"reply": "สวัสดี"}');
-    return { ...info, ok: true, reply: out };
+    return { ...info, ok: true, usedModel: MODEL, reply: out };
   } catch (e) {
     return { ...info, ok: false, error: e.message };
   }
 }
 
 module.exports = {
-  check, available, setProvider, newScene, reviewAction, narrateResult, answerQuestion, continueStory, AIError, MODEL };
+  check, available, setProvider, newScene, reviewAction, narrateResult, answerQuestion, continueStory, AIError, gemini, _setFetch: (f) => (global.fetch = f) };
