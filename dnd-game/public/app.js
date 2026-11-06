@@ -34,6 +34,14 @@
 
   const socket = io();
   let S = null; // latest state from server
+  const AV = {}; // avatars by player id ('ai' = AI DM), sent separately to keep state small
+  const av = (id, size = 28, cls = '') => D20Avatar.html(AV[id], id, size, cls);
+  const dmAvatarId = () => (S?.dmMode === 'ai' ? 'ai' : S?.dmId);
+  const dmName = () => {
+    if (S?.dmMode === 'ai') return `🤖 ${S.aiDM?.name || 'AI DM'}`;
+    const d = S?.players.find((p) => p.id === S.dmId);
+    return `👑 ${d?.dmTitle || 'DM'}`;
+  };
   let tab = 'story';
   const drafts = {}; // DM review inputs per action, survive re-renders
   let seenQuestions = 0;
@@ -165,6 +173,8 @@
   });
   socket.on('disconnect', () => toast('หลุดการเชื่อมต่อ... กำลังต่อใหม่', 'error'));
   socket.on('toast', (t) => toast(t.msg, t.type));
+  socket.on('avatars', (m) => { Object.assign(AV, m || {}); lastLogId = null; render(); });
+  socket.on('avatar', ({ id, avatar }) => { AV[id] = avatar; lastLogId = null; render(); });
   socket.on('kicked', () => { store.del('d20.room'); alert('คุณถูกเชิญออกจากห้อง'); location.href = location.pathname; });
 
   // ---------- tabs ----------
@@ -201,7 +211,7 @@
     $('#dmTabIcon').textContent = S.isDM ? '👑' : '⚙️';
     $('#dmTabLabel').textContent = S.isDM ? 'DM' : 'ห้อง';
     const role = $('#roleChip');
-    role.textContent = S.isDM ? '👑 DM' : `🧙 ${me()?.char?.name || me()?.name || ''}`;
+    role.innerHTML = `${av(S.you, 20, 'chip-av')}<span>${esc(S.isDM ? 'DM' : me()?.char?.name || me()?.name || '')}</span>`;
     role.classList.toggle('dm', S.isDM);
 
     renderStory();
@@ -210,6 +220,7 @@
     renderDice();
     renderAsk();
     renderAI();
+    renderProfiles();
     renderWorld();
     renderEnding();
     fillSettings(false);
@@ -255,8 +266,18 @@
       : `[${r.dice.join(', ')}]`;
     return `<span class="dice-line">${r.count}d${r.sides}${MODE[r.mode] ? ` (${MODE[r.mode]})` : ''} ${kept}${r.mod ? ` ${sign(r.mod)}` : ''} = <b>${r.total}</b></span>`;
   }
-  const dmLabel = () => (S?.dmMode === 'ai' ? '🤖 AI DM' : 'DM');
+  const dmLabel = () => dmName();
+  const PERSON_KINDS = ['declare', 'chat', 'check', 'roll'];
+  const DM_KINDS = ['narrate', 'scene', 'approve', 'deny', 'auto', 'event'];
+  // Wrap an entry with the speaker's avatar.
   function entryHTML(e) {
+    const inner = entryInner(e);
+    const id = PERSON_KINDS.includes(e.kind) ? e.playerId : DM_KINDS.includes(e.kind) ? dmAvatarId() : null;
+    if (!inner || !id || !inner.endsWith('</div>')) return inner;
+    const who = DM_KINDS.includes(e.kind) ? `<div class="who-dm">${esc(dmName())}</div>` : '';
+    return inner.replace(/^<div class="entry([^"]*)">/, (m, c) => `<div class="entry${c} has-av">${av(id, 30)}<div class="entry-body">${who}`).slice(0, -6) + '</div></div>';
+  }
+  function entryInner(e) {
     switch (e.kind) {
       case 'system': return `<div class="entry system">${esc(e.text)}</div>`;
       case 'travel': return `<div class="entry travel">${esc(e.text)}</div>`;
@@ -374,7 +395,7 @@
       body = a.roll ? `<div>${rollLine(a.roll)} <span class="result ${a.outcome}">${OUTCOME[a.outcome]}</span></div>` : `<span class="result success">${OUTCOME.auto}</span>`;
     }
     return `<div class="card action ${a.status}">
-      <div class="meta">${S.isDM ? `<b>${esc(a.playerName)}</b> · ` : ''}<span class="status">${STATUS[a.status]}</span>${a.stat && a.status === 'pending' ? ` · เสนอใช้ ${esc(a.stat)}` : ''}</div>
+      <div class="meta">${av(a.playerId, 22)} ${S.isDM || a.playerId !== S.you ? `<b>${esc(a.playerName)}</b> · ` : ''}<span class="status">${STATUS[a.status]}</span>${a.stat && a.status === 'pending' ? ` · เสนอใช้ ${esc(a.stat)}` : ''}</div>
       <div class="text">${esc(a.text)}</div>${body}</div>`;
   }
   $('#actionList').addEventListener('input', (e) => {
@@ -482,8 +503,8 @@
     patch($('#partyList'), party.length ? party.map((p) => {
       const c = p.char || {};
       return `<div class="card member">
-        <div class="member-head"><div><span class="dot ${p.connected ? 'on' : ''}"></span><b>${esc(c.name || p.name)}</b>
-          <span class="muted small">${esc(c.cls || '')}${c.name && c.name !== p.name ? ` · ${esc(p.name)}` : ''}</span></div>
+        <div class="member-head"><div class="member-name">${av(p.id, 40)}<div><span class="dot ${p.connected ? 'on' : ''}"></span><b>${esc(c.name || p.name)}</b>
+          <div class="muted small">${esc(c.cls || '')}${c.power ? ` · 💎 ${esc(c.power)}` : ''}${c.name && c.name !== p.name ? ` · ${esc(p.name)}` : ''}</div></div></div>
           <span class="small">❤️ ${c.hp ?? '-'}/${c.maxHp ?? '-'}</span></div>
         <div class="hpbar"><div style="width:${c.maxHp ? Math.round((c.hp / c.maxHp) * 100) : 0}%"></div></div>
         ${S.settings.stats.length ? `<div class="muted small">${S.settings.stats.map((s) => `${esc(s)} ${c.stats?.[s] ?? 0}`).join(' · ')}</div>` : ''}
@@ -530,7 +551,8 @@
   }
 
   let overlayTimer;
-  socket.on('dice', ({ by, roll, outcome }) => {
+  socket.on('dice', ({ by, pid, roll, outcome }) => {
+    $('#dieAvatar').innerHTML = pid ? av(pid, 64) : '';
     const ov = $('#diceOverlay');
     const face = $('#dieFace');
     ov.classList.remove('hidden');
@@ -834,6 +856,96 @@
       default:
     }
   });
+
+
+  // ---------- AVATARS / PROFILES ----------
+  function renderProfiles() {
+    const self = me();
+    $('#myAvatarCard').innerHTML = `<div class="card profile-row">${av(S.you, 88, 'big-av')}
+      <div class="grow"><b>${esc(S.isDM ? `${dmName()} (${self?.name || ''})` : self?.char?.name || self?.name || '')}</b>
+      <div class="muted small">${S.isDM ? 'รูปนี้จะขึ้นข้างทุกคำบรรยายของ DM' : 'แต่งตัวละครแบบ pixel หรืออัปโหลดรูปของคุณเอง'}</div>
+      <button class="btn gold small" data-edit-avatar="me" style="margin-top:8px">🎨 แต่งตัวละคร</button></div></div>`;
+    $('#dmAvatar').innerHTML = av(S.you, 64);
+    $('#aiAvatar').innerHTML = av('ai', 64);
+    const t = $('#dmTitleInput');
+    if (document.activeElement !== t && !t.dataset.dirty) t.value = self?.dmTitle || '';
+    const n = $('#aiNameInput'), st = $('#aiStyleInput'), pe = $('#aiPersonaInput');
+    if (!aiProfileDirty && S.aiDM) {
+      n.value = S.aiDM.name;
+      st.innerHTML = (S.aiStyles || []).map((x) => `<option ${x === S.aiDM.style ? 'selected' : ''}>${esc(x)}</option>`).join('');
+      pe.value = S.aiDM.persona;
+    }
+  }
+  let aiProfileDirty = false;
+  ['#aiNameInput', '#aiStyleInput', '#aiPersonaInput'].forEach((sel) => $(sel).addEventListener('input', () => (aiProfileDirty = true)));
+  $('#dmTitleInput').addEventListener('input', (e) => (e.target.dataset.dirty = '1'));
+  $('#dmProfileSave').onclick = () => {
+    socket.emit('dm_profile', { title: $('#dmTitleInput').value });
+    delete $('#dmTitleInput').dataset.dirty;
+    toast('บันทึกโปรไฟล์ DM แล้ว');
+  };
+  $('#aiProfileSave').onclick = () => {
+    socket.emit('ai_profile', { name: $('#aiNameInput').value, style: $('#aiStyleInput').value, persona: $('#aiPersonaInput').value });
+    aiProfileDirty = false;
+    toast('บันทึกโปรไฟล์ AI แล้ว — AI จะเล่าด้วยสไตล์ใหม่');
+  };
+
+  // Editor modal (works for yourself, or the AI DM when target = 'ai').
+  let avTarget = 'me';
+  let avWork = null;
+  function openEditor(target) {
+    avTarget = target;
+    const id = target === 'ai' ? 'ai' : S.you;
+    const cur = AV[id] || (target === 'ai' ? D20Avatar.AI_DEFAULT : D20Avatar.fromSeed(id));
+    avWork = JSON.parse(JSON.stringify(cur));
+    $('#avTitle').textContent = target === 'ai' ? '🤖 แต่งรูป AI DM' : S.isDM ? '👑 แต่งรูป DM' : '🧙 แต่งตัวละคร';
+    setAvMode(avWork.type === 'photo' ? 'photo' : 'pixel');
+    $('#avatarModal').classList.remove('hidden');
+    renderEditor();
+  }
+  function setAvMode(m) {
+    $$('[data-avmode]').forEach((b) => b.classList.toggle('on', b.dataset.avmode === m));
+    $('#avPixel').classList.toggle('hidden', m !== 'pixel');
+    $('#avPhoto').classList.toggle('hidden', m !== 'photo');
+    $('#avRandom').classList.toggle('hidden', m !== 'pixel');
+    if (m === 'pixel' && avWork?.type !== 'pixel') avWork = D20Avatar.fromSeed(avTarget === 'ai' ? 'ai' : S.you);
+    renderEditor();
+  }
+  function renderEditor() {
+    if (!avWork) return;
+    $('#avPreview').innerHTML = D20Avatar.html(avWork, 'x', 128, 'big-av');
+    if (avWork.type !== 'pixel') return;
+    $('#avParts').innerHTML = D20Avatar.PARTS.map((p) => `<div class="av-part"><div class="av-label">${p.label}</div><div class="av-opts">
+      ${p.colors
+        ? p.colors.map((c) => `<button class="swatch ${avWork[p.key] === c ? 'on' : ''}" style="background:${c}" data-k="${p.key}" data-v="${c}" aria-label="${c}"></button>`).join('')
+        : p.options.map((o) => `<button class="chip-opt ${avWork[p.key] === o ? 'on' : ''}" data-k="${p.key}" data-v="${esc(o)}">${esc(o)}</button>`).join('')}
+    </div></div>`).join('');
+  }
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-edit-avatar]');
+    if (b) openEditor(b.dataset.editAvatar);
+  });
+  $$('[data-avmode]').forEach((b) => (b.onclick = () => setAvMode(b.dataset.avmode)));
+  $('#avParts').onclick = (e) => {
+    const b = e.target.closest('[data-k]');
+    if (!b) return;
+    avWork[b.dataset.k] = b.dataset.v;
+    renderEditor();
+  };
+  $('#avRandom').onclick = () => { avWork = D20Avatar.random(); renderEditor(); };
+  $('#avFile').onchange = async (e) => {
+    try {
+      avWork = await D20Avatar.fromFile(e.target.files[0]);
+      renderEditor();
+    } catch (err) { toast(err.message, 'error'); }
+    e.target.value = '';
+  };
+  $('#avClose').onclick = () => $('#avatarModal').classList.add('hidden');
+  $('#avSave').onclick = () => {
+    socket.emit('set_avatar', { avatar: avWork, target: avTarget === 'ai' ? 'ai' : undefined });
+    $('#avatarModal').classList.add('hidden');
+    toast('บันทึกรูปแล้ว');
+  };
 
   // ---------- ENDING ----------
   let endingSeen = null;

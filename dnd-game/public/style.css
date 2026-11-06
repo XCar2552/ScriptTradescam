@@ -289,3 +289,39 @@ body.is-dm .player-only { display: none !important; }
 .overlay.ending.lose .ending-title { color: var(--bad); }
 .ending-text { max-width: 420px; color: #e1d9f2; }
 @keyframes pop { from { transform: scale(.2); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+/* ---------- Avatars ---------- */
+.avatar { display: inline-block; border-radius: 8px; overflow: hidden; flex-shrink: 0; vertical-align: middle; background: var(--bg2); }
+.avatar svg, .avatar img { width: 100%; height: 100%; display: block; object-fit: cover; image-rendering: pixelated; }
+.avatar.big-av { border-radius: 16px; border: 2px solid var(--line); }
+.chip-av { border-radius: 50%; margin-right: 4px; }
+#roleChip { display: inline-flex; align-items: center; max-width: 34vw; overflow: hidden; }
+#roleChip span { overflow: hidden; text-overflow: ellipsis; }
+.entry.has-av { display: flex; gap: 8px; align-items: flex-start; }
+.entry-body { flex: 1; min-width: 0; }
+.who-dm { font-size: .72rem; font-weight: 700; color: var(--gold); font-style: normal; }
+.member-name { display: flex; gap: 10px; align-items: center; }
+.profile-row { display: flex; gap: 12px; align-items: center; }
+.grow { flex: 1; min-width: 0; }
+.action .meta .avatar { margin-right: 2px; }
+#dieAvatar .avatar { border-radius: 16px; border: 2px solid var(--gold); }
+
+/* ---------- Avatar editor modal ---------- */
+.modal { position: fixed; inset: 0; background: #0b0912cc; z-index: 70; display: flex; align-items: flex-end; justify-content: center; }
+.modal-card { background: var(--card); width: 100%; max-width: 520px; max-height: 92dvh; overflow-y: auto; border-radius: 18px 18px 0 0; padding: 14px 14px calc(14px + env(safe-area-inset-bottom)); border: 1px solid var(--line); }
+@media (min-width: 600px) { .modal { align-items: center; } .modal-card { border-radius: 18px; } }
+.modal-head { display: flex; align-items: center; justify-content: space-between; }
+.modal-head h2 { margin: 0; }
+.av-preview { display: flex; justify-content: center; margin: 8px 0 12px; }
+.seg { display: flex; background: var(--bg2); border-radius: 10px; padding: 3px; margin-bottom: 10px; }
+.seg button { flex: 1; border: 0; background: none; color: var(--muted); font: inherit; font-size: .9rem; padding: 8px; border-radius: 8px; }
+.seg button.on { background: var(--primary); color: #fff; }
+.av-part { margin-bottom: 10px; }
+.av-label { font-size: .78rem; color: var(--muted); margin-bottom: 4px; }
+.av-opts { display: flex; flex-wrap: wrap; gap: 6px; }
+.swatch { width: 32px; height: 32px; border-radius: 50%; border: 2px solid var(--line); padding: 0; }
+.swatch.on { border-color: #fff; box-shadow: 0 0 0 2px var(--primary); }
+.chip-opt { font: inherit; font-size: .82rem; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg2); color: var(--text); }
+.chip-opt.on { background: var(--primary); border-color: var(--primary); }
+.upload-btn { display: flex; align-items: center; justify-content: center; }
+.modal-foot { position: sticky; bottom: 0; background: var(--card); padding-top: 8px; }

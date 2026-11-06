@@ -47,6 +47,26 @@ const THEMES = ['แฟนตาซี', 'ไซไฟ', 'สยองขวั�
 const rooms = new Map();
 const LIMITS = { name: 40, text: 600, scene: 2000, log: 300 };
 const ENDING_TEXT = { win: '🏆 ชนะ!', lose: '💀 พ่ายแพ้...' };
+const AI_STYLES = ['ใจดี สนุกสนาน', 'ตลก กวนๆ', 'ดุดัน จริงจัง', 'ลึกลับ น่ากลัว', 'ดราม่า อลังการ'];
+
+// Avatar = pixel parts (short strings) or a small uploaded JPEG/PNG/WebP.
+function cleanAvatar(a) {
+  if (!a || typeof a !== 'object') return null;
+  if (a.type === 'photo') {
+    const data = String(a.data || '');
+    if (!/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(data) || data.length > 80000) return null;
+    return { type: 'photo', data };
+  }
+  if (a.type === 'pixel') {
+    const out = { type: 'pixel' };
+    for (const k of ['skin', 'hair', 'hairColor', 'eyes', 'mouth', 'outfit', 'outfitColor', 'hat', 'acc', 'bg']) {
+      const v = String(a[k] ?? '').slice(0, 20);
+      if (/^#[0-9a-fA-F]{6}$/.test(v) || /^[\p{L}\p{M}\s]{1,20}$/u.test(v)) out[k] = v;
+    }
+    return out;
+  }
+  return null;
+}
 
 const clip = (v, n) => String(v ?? '').trim().slice(0, n);
 const int = (v, min, max, def) => {
@@ -208,6 +228,8 @@ function viewFor(room, viewerId) {
       connected: p.connected,
       isDM: p.id === room.dmId,
       char: p.char,
+      dmTitle: p.dmTitle || '',
+      avatarRev: room.avatarRev[p.id] || 0,
     })),
     actions: room.actions
       .filter((a) => isDM || a.playerId === viewerId || a.status !== 'pending')
@@ -221,6 +243,8 @@ function viewFor(room, viewerId) {
     visited: room.visited,
     ending: room.ending,
     canGM: isDM || (room.dmMode === 'ai' && viewerId === room.hostId),
+    aiDM: room.aiDM,
+    aiStyles: AI_STYLES,
     themeCards: themes.CARDS,
   };
 }
@@ -413,6 +437,7 @@ io.on('connection', (socket) => {
     player.socketId = socket.id;
     player.connected = true;
     socket.join(r.code);
+    socket.emit('avatars', r.avatars);
   }
 
   function leave() {
@@ -440,6 +465,9 @@ io.on('connection', (socket) => {
       aiBusy: 0,
       aiError: '',
       aiQueue: Promise.resolve(),
+      aiDM: { name: 'AI DM', style: AI_STYLES[0], persona: '' },
+      avatars: {},
+      avatarRev: {},
       createdAt: Date.now(),
       settings: defaultSettings(payload.preset),
       scene: { title: 'บทนำ', text: wantAI ? 'AI DM จะเริ่มเรื่องเมื่อเจ้าของห้องกด "เริ่มเรื่อง"' : 'DM กำลังเตรียมฉากแรก...' },
@@ -548,6 +576,7 @@ io.on('connection', (socket) => {
     if (!target || target.id === room.dmId || target.id === room.hostId || target.id === me.id) return;
     if (target.socketId) io.to(target.socketId).emit('kicked');
     delete room.players[target.id];
+    delete room.avatars[target.id];
     addLog(room, { kind: 'system', text: `${target.name} ถูกเชิญออกจากห้อง` });
   }));
 
@@ -625,7 +654,7 @@ io.on('connection', (socket) => {
       dc: a.dc,
       outcome: a.outcome,
     });
-    io.to(room.code).emit('dice', { by: a.playerName, roll, outcome: a.outcome });
+    io.to(room.code).emit('dice', { by: a.playerName, pid: a.playerId, roll, outcome: a.outcome });
     if (room.dmMode === 'ai') aiNarrate(room, a);
   }));
 
@@ -658,8 +687,8 @@ io.on('connection', (socket) => {
       label,
       visibility: hidden ? 'dm' : 'all',
     });
-    if (hidden) socket.emit('dice', { by: 'DM (ลับ)', roll });
-    else io.to(room.code).emit('dice', { by: isDM() ? 'DM' : me.char?.name || me.name, roll });
+    if (hidden) socket.emit('dice', { by: 'DM (ลับ)', pid: me.id, roll });
+    else io.to(room.code).emit('dice', { by: isDM() ? 'DM' : me.char?.name || me.name, pid: me.id, roll });
   }));
 
   // ----- Ask the DM -----
@@ -714,6 +743,32 @@ io.on('connection', (socket) => {
       addLog(room, { kind: 'narrate', text: r.narration });
       applyAIEffects(room, r);
     });
+  }));
+
+  // ----- Avatars & DM profiles -----
+  // target 'ai' = the AI DM's look (room owner / GM only); otherwise your own.
+  socket.on('set_avatar', guard(false, (p) => {
+    const av = cleanAvatar(p.avatar);
+    if (!av) return fail('รูปนี้ใช้ไม่ได้ (ไฟล์ใหญ่ไปหรือรูปแบบไม่รองรับ)');
+    let id = me.id;
+    if (p.target === 'ai') {
+      if (!isHost() && !isGM()) return fail('เฉพาะเจ้าของห้องแต่ง AI DM ได้');
+      id = 'ai';
+    }
+    room.avatars[id] = av;
+    room.avatarRev[id] = (room.avatarRev[id] || 0) + 1;
+    io.to(room.code).emit('avatar', { id, avatar: av });
+  }));
+
+  socket.on('dm_profile', guard('dm', (p) => {
+    me.dmTitle = clip(p.title, 40);
+  }));
+
+  socket.on('ai_profile', guard('host', (p) => {
+    const a = room.aiDM;
+    if (p.name !== undefined) a.name = clip(p.name, 30) || 'AI DM';
+    if (p.style !== undefined) a.style = AI_STYLES.includes(p.style) ? p.style : a.style;
+    if (p.persona !== undefined) a.persona = clip(p.persona, 300);
   }));
 
   // ----- World: theme, travel, goals, trackers, endings -----

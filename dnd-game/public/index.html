@@ -123,6 +123,7 @@
 
       <!-- CHARACTER / PARTY -->
       <div class="pane" data-pane="char">
+        <div id="myAvatarCard"></div>
         <div id="charSheet"></div>
         <h3 class="section-title">ปาร์ตี้</h3>
         <div id="partyList"></div>
@@ -165,6 +166,24 @@
               <button id="toHuman" class="btn gold">👑 ให้คนนี้เป็น DM</button>
             </div>
           </div>
+        </div>
+        <div class="card dm-only">
+          <h2>🎭 โปรไฟล์ DM ของฉัน</h2>
+          <div class="profile-row"><span id="dmAvatar"></span>
+            <div class="grow"><input id="dmTitleInput" maxlength="40" placeholder="ฉายา DM เช่น ‘ผู้คุมทะเลพันเกาะ’" />
+            <div class="btn-row" style="margin-top:8px"><button class="btn small" data-edit-avatar="me">🎨 แต่งรูป DM</button><button id="dmProfileSave" class="btn gold small">บันทึก</button></div></div>
+          </div>
+        </div>
+        <div class="card ai-only">
+          <h2>🤖 โปรไฟล์ AI DM</h2>
+          <div class="profile-row"><span id="aiAvatar"></span>
+            <div class="grow"><input id="aiNameInput" maxlength="30" placeholder="ชื่อ AI DM เช่น ‘ปู่หมึกนักเล่าตำนาน’" />
+              <button class="btn small" data-edit-avatar="ai" style="margin-top:8px">🎨 แต่งรูป AI DM</button></div>
+          </div>
+          <label class="field" style="margin-top:10px">สไตล์การเล่าเรื่อง <select id="aiStyleInput"></select></label>
+          <label class="field">บุคลิกเพิ่มเติม (ไม่ใส่ก็ได้)
+            <textarea id="aiPersonaInput" rows="2" maxlength="300" placeholder="เช่น ‘พูดลงท้ายด้วย ‘ฮึ่ม’ ชอบแซวผู้เล่น เป็นโจรสลัดชราขี้เมา’"></textarea></label>
+          <button id="aiProfileSave" class="btn gold block">บันทึกโปรไฟล์ AI</button>
         </div>
         <div class="card ai-only">
           <h2>🤖 สั่ง AI DM</h2>
@@ -221,9 +240,24 @@
 
   <!-- Dice animation overlay -->
   <div id="diceOverlay" class="overlay hidden">
+    <div id="dieAvatar"></div>
     <div class="die" id="dieFace">20</div>
     <div class="die-caption" id="dieCaption"></div>
     <div class="die-outcome" id="dieOutcome"></div>
+  </div>
+
+  <div id="avatarModal" class="modal hidden">
+    <div class="modal-card">
+      <div class="modal-head"><h2 id="avTitle">แต่งตัวละคร</h2><button class="icon-btn" id="avClose">✕</button></div>
+      <div class="av-preview" id="avPreview"></div>
+      <div class="seg"><button data-avmode="pixel" class="on">🎨 แต่งแบบ Pixel</button><button data-avmode="photo">📷 อัปโหลดรูป</button></div>
+      <div id="avPixel"><div id="avParts"></div></div>
+      <div id="avPhoto" class="hidden">
+        <label class="btn primary block upload-btn">📷 เลือกรูปจากเครื่อง<input type="file" id="avFile" accept="image/*" hidden></label>
+        <p class="muted small">รูปจะถูกตัดเป็นสี่เหลี่ยมจัตุรัส และย่อเหลือ 128×128 อัตโนมัติ · รูปจะหายไปพร้อมห้องถ้าเซิร์ฟเวอร์หลับ</p>
+      </div>
+      <div class="btn-row modal-foot"><button class="btn" id="avRandom">🎲 สุ่ม</button><button class="btn gold" id="avSave">💾 บันทึก</button></div>
+    </div>
   </div>
 
   <div id="endingOverlay" class="overlay ending hidden">
@@ -240,6 +274,7 @@
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="art.js"></script>
+  <script src="avatar.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

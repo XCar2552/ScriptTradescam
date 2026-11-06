@@ -129,6 +129,7 @@ function systemPrompt(room) {
     : 'เกมนี้ไม่มีค่าสถานะ';
   return [
     'คุณคือ Dungeon Master (DM) ของเกมเล่นตามบทบาทแนว D&D ที่ใช้ลูกเต๋า D20',
+    room.aiDM ? `ชื่อของคุณคือ "${room.aiDM.name}" สไตล์การเล่าเรื่อง: ${room.aiDM.style}${room.aiDM.persona ? `. บุคลิกเพิ่มเติม: ${room.aiDM.persona}` : ''} — เล่าเรื่องด้วยน้ำเสียงนี้เสมอ` : '',
     `ธีม/โลกของเกม: ${s.theme}. รูปแบบกติกา: ${s.preset}. ${statsLine}.`,
     `DC มาตรฐาน: ง่าย 8-10, ปกติ ${s.defaultDC}, ยาก 15-17, ยากมาก 18-20, แทบเป็นไปไม่ได้ 22+.`,
     s.houseRules ? `กติกาเพิ่มเติมของห้อง: ${s.houseRules}` : '',
