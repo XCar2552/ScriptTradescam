@@ -40,6 +40,13 @@
           <option value="custom">กำหนดเอง (ตั้งค่าสถานะเอง)</option>
         </select>
       </label>
+      <label class="field">ใครเป็น DM
+        <select id="dmModeInput">
+          <option value="human">👑 คนจริง (ฉันเป็น DM)</option>
+          <option value="ai">🤖 AI เป็น DM (Gemini) — ทุกคนได้เล่น</option>
+        </select>
+      </label>
+      <p class="muted small hidden" id="aiOffHint">AI ยังไม่พร้อม: ต้องใส่ GEMINI_API_KEY ในเซิร์ฟเวอร์ก่อน (ดู README)</p>
       <button id="createBtn" class="btn gold block">สร้างห้อง</button>
     </div>
 
@@ -66,6 +73,11 @@
           <div class="scene-text" id="sceneText"></div>
         </div>
         <div id="log" class="log"></div>
+        <div id="aiBar" class="ai-bar ai-only">
+          <span id="aiStatus" class="small"></span>
+          <button id="aiRetry" class="btn bad small hidden">ลองใหม่</button>
+          <button id="aiContinue" class="btn small">🤖 ให้ DM เล่าต่อ</button>
+        </div>
         <form id="chatForm" class="composer">
           <input id="chatInput" maxlength="600" placeholder="พูดคุยในกลุ่ม..." />
           <button class="btn primary">ส่ง</button>
@@ -133,13 +145,32 @@
 
       <!-- DM CONTROL -->
       <div class="pane" data-pane="dm">
-        <div class="card">
+        <div class="card host-only">
+          <h2>🎭 ใครเป็น DM</h2>
+          <p id="modeNow" class="small"></p>
+          <div class="human-only">
+            <button id="toAI" class="btn primary block">🤖 ให้ AI เป็น DM แทน</button>
+            <p class="muted small" id="toAIHint"></p>
+          </div>
+          <div>
+            <div class="row">
+              <select id="dmPick"></select>
+              <button id="toHuman" class="btn gold">👑 ให้คนนี้เป็น DM</button>
+            </div>
+          </div>
+        </div>
+        <div class="card ai-only">
+          <h2>🤖 สั่ง AI DM</h2>
+          <textarea id="aiIdea" rows="2" maxlength="600" placeholder="ไอเดียเรื่อง (ไม่ใส่ก็ได้) เช่น ‘ปล้นรถไฟในโลกคาวบอย’"></textarea>
+          <button id="aiSceneBtn" class="btn gold block">🎬 ให้ AI สร้างฉากใหม่</button>
+        </div>
+        <div class="card dm-only">
           <h2>🎬 ตั้งฉาก / สถานการณ์</h2>
           <input id="sceneTitleInput" maxlength="80" placeholder="ชื่อฉาก เช่น ‘ถ้ำมังกรหลับ’" />
           <textarea id="sceneTextInput" rows="4" maxlength="2000" placeholder="บรรยายสิ่งที่ผู้เล่นเห็น ได้ยิน รู้สึก..."></textarea>
           <button id="sceneSend" class="btn gold block">ตั้งเป็นฉากปัจจุบัน</button>
         </div>
-        <div class="card">
+        <div class="card dm-only">
           <h2>🗣️ บรรยาย / ให้คำแนะนำ</h2>
           <textarea id="narrateInput" rows="2" maxlength="600" placeholder="เช่น ‘เสียงฝีเท้าดังมาจากทางเดินด้านซ้าย…’"></textarea>
           <button id="narrateSend" class="btn primary block">ส่งคำบรรยาย</button>
@@ -172,7 +203,7 @@
       <button data-tab="char"><span>🧙</span>ตัวละคร</button>
       <button data-tab="dice"><span>🎲</span>ทอยเต๋า</button>
       <button data-tab="ask"><span>❓</span>ถาม DM<i class="badge" id="askBadge"></i></button>
-      <button data-tab="dm" class="dm-only"><span>👑</span>DM</button>
+      <button data-tab="dm" class="host-only"><span id="dmTabIcon">👑</span><b id="dmTabLabel" style="font-weight:inherit">DM</b></button>
     </nav>
   </section>
 

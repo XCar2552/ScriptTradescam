@@ -5,10 +5,12 @@ const crypto = require('crypto');
 const http = require('http');
 const express = require('express');
 const { Server } = require('socket.io');
+const ai = require('./ai');
 
 const app = express();
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/health', (_req, res) => res.json({ ok: true, rooms: rooms.size }));
+app.get('/config', (_req, res) => res.json({ aiAvailable: ai.available() }));
 
 const server = http.createServer(app);
 const io = new Server(server);
@@ -106,7 +108,13 @@ function viewFor(room, viewerId) {
     code: room.code,
     you: viewerId,
     isDM,
+    isHost: viewerId === room.hostId,
+    hostId: room.hostId,
     dmId: room.dmId,
+    dmMode: room.dmMode,
+    aiAvailable: ai.available(),
+    aiBusy: room.aiBusy > 0,
+    aiError: room.aiError,
     settings: room.settings,
     presets: Object.fromEntries(Object.entries(PRESETS).map(([k, v]) => [k, v.label])),
     themes: THEMES,
@@ -154,6 +162,123 @@ function judge(room, roll, dc) {
   return roll.total >= dc ? 'success' : 'fail';
 }
 
+// ---------- AI Dungeon Master ----------
+// Calls are queued per room so the story stays in order.
+function runAI(room, job) {
+  room.aiBusy++;
+  broadcast(room);
+  room.aiQueue = room.aiQueue
+    .then(async () => {
+      if (room.dmMode !== 'ai' || !rooms.has(room.code)) return;
+      await job();
+      room.aiError = '';
+    })
+    .catch((err) => {
+      console.error('AI error:', err.code || '', err.message);
+      room.aiError = err instanceof ai.AIError ? err.message : 'AI มีปัญหา';
+      addLog(room, { kind: 'system', text: `🤖 AI DM ตอบไม่ได้: ${room.aiError} — กด "ลองใหม่" หรือให้เจ้าของห้องสลับเป็นคนจริงเป็น DM` });
+    })
+    .finally(() => {
+      room.aiBusy--;
+      broadcast(room);
+    });
+  return room.aiQueue;
+}
+
+function findByCharName(room, name) {
+  const n = String(name).trim().toLowerCase();
+  return Object.values(room.players).find(
+    (p) => p.char && ((p.char.name || '').toLowerCase() === n || p.name.toLowerCase() === n),
+  );
+}
+
+function applyHp(room, changes) {
+  for (const h of changes) {
+    const t = findByCharName(room, h.name);
+    if (!t) continue;
+    t.char.hp = Math.max(0, Math.min(t.char.maxHp, t.char.hp + h.delta));
+    addLog(room, {
+      kind: 'system',
+      text: `${t.char.name || t.name} ${h.delta < 0 ? 'เสีย' : 'ฟื้น'} HP ${Math.abs(h.delta)} (เหลือ ${t.char.hp}/${t.char.maxHp})`,
+    });
+  }
+}
+
+function aiScene(room, idea) {
+  return runAI(room, async () => {
+    const sc = await ai.newScene(room, idea);
+    room.scene = sc;
+    addLog(room, { kind: 'scene', title: sc.title, text: sc.text });
+  });
+}
+
+function aiReview(room, action) {
+  return runAI(room, async () => {
+    if (action.status !== 'pending') return;
+    const r = await ai.reviewAction(room, action);
+    if (action.status !== 'pending') return;
+    applyReview(room, action, { ...r, decision: r.decision === 'roll' ? 'approve' : r.decision });
+    if (r.decision !== 'roll' && r.narration) addLog(room, { kind: 'narrate', text: r.narration });
+  });
+}
+
+function aiNarrate(room, action) {
+  return runAI(room, async () => {
+    if (action.status !== 'rolled') return;
+    const r = await ai.narrateResult(room, action);
+    if (action.status !== 'rolled') return;
+    action.status = 'resolved';
+    addLog(room, { kind: 'narrate', text: r.narration, ref: action.playerName });
+    applyHp(room, r.hpChanges);
+  });
+}
+
+function aiAnswer(room, q) {
+  return runAI(room, async () => {
+    if (q.answer) return;
+    q.answer = await ai.answerQuestion(room, q);
+  });
+}
+
+function aiCatchUp(room) {
+  for (const a of room.actions) {
+    if (a.status === 'pending') aiReview(room, a);
+    if (a.status === 'rolled') aiNarrate(room, a);
+  }
+  for (const q of room.questions) if (!q.answer) aiAnswer(room, q);
+}
+
+function applyReview(room, a, p) {
+  const note = clip(p.note, LIMITS.text);
+  if (p.decision === 'deny') {
+    a.status = 'denied';
+    a.note = note || 'ทำแบบนั้นไม่ได้ในสถานการณ์นี้';
+    addLog(room, { kind: 'deny', name: a.playerName, text: a.text, note: a.note });
+  } else if (p.decision === 'auto') {
+    a.status = 'resolved';
+    a.outcome = 'auto';
+    a.note = note;
+    addLog(room, { kind: 'auto', name: a.playerName, text: a.text, note });
+  } else {
+    a.status = 'approved';
+    a.dc = int(p.dc, 1, 40, room.settings.defaultDC);
+    a.stat = room.settings.stats.includes(p.stat) ? p.stat : a.stat;
+    a.mode = room.settings.allowAdvantage && ['adv', 'dis'].includes(p.mode) ? p.mode : 'normal';
+    a.bonus = int(p.bonus, -20, 20, 0);
+    a.hiddenDC = !!p.hiddenDC;
+    a.note = note;
+    addLog(room, {
+      kind: 'approve',
+      name: a.playerName,
+      text: a.text,
+      note,
+      stat: a.stat,
+      mode: a.mode,
+      dc: a.hiddenDC ? null : a.dc,
+    });
+  }
+}
+
 // ---------- Socket handlers ----------
 io.on('connection', (socket) => {
   let room = null;
@@ -161,10 +286,13 @@ io.on('connection', (socket) => {
 
   const fail = (msg) => socket.emit('toast', { type: 'error', msg });
   const isDM = () => room && me && room.dmId === me.id;
-  const guard = (needDM, fn) => (payload = {}, ack) => {
+  const isHost = () => room && me && (room.hostId === me.id || isDM());
+  // level: false = anyone in the room, 'dm' = human DM, 'host' = room owner or DM
+  const guard = (level, fn) => (payload = {}, ack) => {
     try {
       if (!room || !me) return fail('ยังไม่ได้เข้าห้อง');
-      if (needDM && !isDM()) return fail('คำสั่งนี้สำหรับ DM เท่านั้น');
+      if (level === 'dm' && !isDM()) return fail('คำสั่งนี้สำหรับ DM เท่านั้น');
+      if (level === 'host' && !isHost()) return fail('คำสั่งนี้สำหรับเจ้าของห้องหรือ DM');
       fn(payload || {});
       broadcast(room);
       if (typeof ack === 'function') ack({ ok: true });
@@ -195,13 +323,22 @@ io.on('connection', (socket) => {
   socket.on('create_room', (payload = {}, ack) => {
     const name = clip(payload.name, LIMITS.name) || 'DM';
     const playerId = clip(payload.playerId, 32) || uid();
+    const wantAI = payload.dmMode === 'ai';
+    if (wantAI && !ai.available()) {
+      return typeof ack === 'function' && ack({ ok: false, msg: 'เซิร์ฟเวอร์ยังไม่ได้ตั้งค่า AI (GEMINI_API_KEY)' });
+    }
     const code = newCode();
     const r = {
       code,
-      dmId: playerId,
+      hostId: playerId,
+      dmId: wantAI ? null : playerId,
+      dmMode: wantAI ? 'ai' : 'human',
+      aiBusy: 0,
+      aiError: '',
+      aiQueue: Promise.resolve(),
       createdAt: Date.now(),
       settings: defaultSettings(payload.preset),
-      scene: { title: 'บทนำ', text: 'DM กำลังเตรียมฉากแรก...' },
+      scene: { title: 'บทนำ', text: wantAI ? 'AI DM จะเริ่มเรื่องเมื่อเจ้าของห้องกด "เริ่มเรื่อง"' : 'DM กำลังเตรียมฉากแรก...' },
       players: {},
       actions: [],
       questions: [],
@@ -209,9 +346,10 @@ io.on('connection', (socket) => {
     };
     rooms.set(code, r);
     const p = { id: playerId, name, connected: true, socketId: null, char: null };
+    if (wantAI) p.char = newCharacter(r, name);
     r.players[playerId] = p;
     attach(r, p);
-    addLog(r, { kind: 'system', text: `${name} สร้างห้องและเป็น DM` });
+    addLog(r, { kind: 'system', text: wantAI ? `${name} สร้างห้อง — 🤖 AI เป็น DM` : `${name} สร้างห้องและเป็น DM` });
     broadcast(r);
     if (typeof ack === 'function') ack({ ok: true, code, playerId });
   });
@@ -244,7 +382,7 @@ io.on('connection', (socket) => {
   });
 
   // ----- DM: rules / scene -----
-  socket.on('update_settings', guard(true, (p) => {
+  socket.on('update_settings', guard('host', (p) => {
     const s = room.settings;
     if (p.preset && PRESETS[p.preset] && p.preset !== s.preset) {
       const fresh = defaultSettings(p.preset);
@@ -277,17 +415,17 @@ io.on('connection', (socket) => {
     if (p.houseRules !== undefined) s.houseRules = clip(p.houseRules, LIMITS.scene);
   }));
 
-  socket.on('set_scene', guard(true, (p) => {
+  socket.on('set_scene', guard('dm', (p) => {
     room.scene = { title: clip(p.title, 80) || 'ฉากใหม่', text: clip(p.text, LIMITS.scene) };
     addLog(room, { kind: 'scene', title: room.scene.title, text: room.scene.text });
   }));
 
-  socket.on('narrate', guard(true, (p) => {
+  socket.on('narrate', guard('dm', (p) => {
     const text = clip(p.text, LIMITS.text);
     if (text) addLog(room, { kind: 'narrate', text });
   }));
 
-  socket.on('dm_hp', guard(true, (p) => {
+  socket.on('dm_hp', guard('dm', (p) => {
     const target = room.players[p.playerId];
     if (!target?.char) return;
     const delta = int(p.delta, -999, 999, 0);
@@ -298,9 +436,9 @@ io.on('connection', (socket) => {
     });
   }));
 
-  socket.on('kick', guard(true, (p) => {
+  socket.on('kick', guard('host', (p) => {
     const target = room.players[p.playerId];
-    if (!target || target.id === room.dmId) return;
+    if (!target || target.id === room.dmId || target.id === room.hostId || target.id === me.id) return;
     if (target.socketId) io.to(target.socketId).emit('kicked');
     delete room.players[target.id];
     addLog(room, { kind: 'system', text: `${target.name} ถูกเชิญออกจากห้อง` });
@@ -350,39 +488,13 @@ io.on('connection', (socket) => {
     room.actions.push(action);
     if (room.actions.length > 100) room.actions.splice(0, room.actions.length - 100);
     addLog(room, { kind: 'declare', playerId: me.id, name: action.playerName, text });
+    if (room.dmMode === 'ai' && action.status === 'pending') aiReview(room, action);
   }));
 
-  socket.on('review_action', guard(true, (p) => {
+  socket.on('review_action', guard('dm', (p) => {
     const a = room.actions.find((x) => x.id === p.actionId);
     if (!a || a.status !== 'pending') return;
-    const note = clip(p.note, LIMITS.text);
-    if (p.decision === 'deny') {
-      a.status = 'denied';
-      a.note = note || 'ทำแบบนั้นไม่ได้ในสถานการณ์นี้';
-      addLog(room, { kind: 'deny', name: a.playerName, text: a.text, note: a.note });
-    } else if (p.decision === 'auto') {
-      a.status = 'resolved';
-      a.outcome = 'auto';
-      a.note = note;
-      addLog(room, { kind: 'auto', name: a.playerName, text: a.text, note });
-    } else {
-      a.status = 'approved';
-      a.dc = int(p.dc, 1, 40, room.settings.defaultDC);
-      a.stat = room.settings.stats.includes(p.stat) ? p.stat : a.stat;
-      a.mode = room.settings.allowAdvantage && ['adv', 'dis'].includes(p.mode) ? p.mode : 'normal';
-      a.bonus = int(p.bonus, -20, 20, 0);
-      a.hiddenDC = !!p.hiddenDC;
-      a.note = note;
-      addLog(room, {
-        kind: 'approve',
-        name: a.playerName,
-        text: a.text,
-        note,
-        stat: a.stat,
-        mode: a.mode,
-        dc: a.hiddenDC ? null : a.dc,
-      });
-    }
+    applyReview(room, a, p);
   }));
 
   socket.on('roll_action', guard(false, (p) => {
@@ -406,9 +518,10 @@ io.on('connection', (socket) => {
       outcome: a.outcome,
     });
     io.to(room.code).emit('dice', { by: a.playerName, roll, outcome: a.outcome });
+    if (room.dmMode === 'ai') aiNarrate(room, a);
   }));
 
-  socket.on('resolve_action', guard(true, (p) => {
+  socket.on('resolve_action', guard('dm', (p) => {
     const a = room.actions.find((x) => x.id === p.actionId);
     if (!a || !['rolled', 'approved'].includes(a.status)) return;
     a.status = 'resolved';
@@ -455,9 +568,53 @@ io.on('connection', (socket) => {
       ts: Date.now(),
     });
     if (room.questions.length > 100) room.questions.shift();
+    if (room.dmMode === 'ai') aiAnswer(room, room.questions.at(-1));
   }));
 
-  socket.on('answer', guard(true, (p) => {
+  // ----- DM mode: human <-> AI -----
+  socket.on('set_dm_mode', guard('host', (p) => {
+    if (p.mode === 'ai') {
+      if (!ai.available()) return fail('เซิร์ฟเวอร์ยังไม่ได้ตั้งค่า AI (GEMINI_API_KEY)');
+      if (room.dmMode === 'ai') return;
+      room.dmMode = 'ai';
+      room.dmId = null;
+      room.aiError = '';
+      for (const pl of Object.values(room.players)) if (!pl.char) pl.char = newCharacter(room, pl.name);
+      addLog(room, { kind: 'system', text: '🤖 เปลี่ยนเป็น AI เป็น DM — ทุกคนเป็นผู้เล่นแล้ว' });
+      aiCatchUp(room);
+    } else if (p.mode === 'human') {
+      const target = room.players[p.dmId] || room.players[room.hostId] || me;
+      room.dmMode = 'human';
+      room.dmId = target.id;
+      room.aiError = '';
+      addLog(room, { kind: 'system', text: `👑 ${target.char?.name || target.name} เป็น DM แล้ว` });
+    }
+  }));
+
+  socket.on('ai_scene', guard('host', (p) => {
+    if (room.dmMode !== 'ai') return fail('ห้องนี้ใช้คนเป็น DM');
+    aiScene(room, clip(p.idea, LIMITS.text));
+  }));
+
+  socket.on('ai_continue', guard(false, (p) => {
+    if (room.dmMode !== 'ai') return fail('ห้องนี้ใช้คนเป็น DM');
+    if (room.aiBusy > 0) return fail('AI กำลังคิดอยู่ รอแป๊บนะ');
+    const request = clip(p.text, LIMITS.text);
+    if (request) addLog(room, { kind: 'chat', playerId: me.id, name: me.char?.name || me.name, text: `(ขอ DM) ${request}` });
+    runAI(room, async () => {
+      const r = await ai.continueStory(room, request);
+      addLog(room, { kind: 'narrate', text: r.narration });
+      applyHp(room, r.hpChanges);
+    });
+  }));
+
+  socket.on('ai_retry', guard(false, () => {
+    if (room.dmMode !== 'ai') return;
+    room.aiError = '';
+    aiCatchUp(room);
+  }));
+
+  socket.on('answer', guard('dm', (p) => {
     const q = room.questions.find((x) => x.id === p.questionId);
     if (!q) return;
     q.answer = clip(p.text, LIMITS.text);

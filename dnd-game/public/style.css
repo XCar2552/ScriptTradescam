@@ -115,6 +115,13 @@ textarea { resize: vertical; }
 .badge:empty { display: none; }
 
 body:not(.is-dm) .dm-only { display: none !important; }
+body:not(.is-host):not(.is-dm) .host-only { display: none !important; }
+body:not(.ai-mode) .ai-only { display: none !important; }
+body.ai-mode .human-only { display: none !important; }
+.ai-bar { display: flex; gap: 8px; align-items: center; padding: 6px 0 0; flex-shrink: 0; }
+.ai-bar #aiStatus { flex: 1; color: var(--muted); }
+.ai-bar #aiStatus.busy::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--primary); margin-right: 6px; animation: pulse 1s infinite alternate; }
+@keyframes pulse { from { opacity: .3; } to { opacity: 1; } }
 body.is-dm .player-only { display: none !important; }
 
 /* ---------- Story ---------- */

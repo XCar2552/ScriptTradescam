@@ -93,9 +93,15 @@
     $('#home').classList.remove('active');
     $('#game').classList.add('active');
   }
+  fetch('/config').then((r) => r.json()).then((c) => {
+    if (!c.aiAvailable) {
+      $('#dmModeInput option[value="ai"]').disabled = true;
+      $('#aiOffHint').classList.remove('hidden');
+    }
+  }).catch(() => {});
   $('#createBtn').onclick = async () => {
     const name = getName();
-    if (name) enter(await emit('create_room', { name, playerId, preset: $('#presetInput').value }));
+    if (name) enter(await emit('create_room', { name, playerId, preset: $('#presetInput').value, dmMode: $('#dmModeInput').value }));
   };
   $('#joinBtn').onclick = async () => {
     const name = getName();
@@ -144,6 +150,7 @@
     $$('.pane').forEach((p) => p.classList.toggle('active', p.dataset.pane === t));
     if (t === 'ask') seenQuestions = S?.questions.length || 0;
     if (t === 'dm') fillSettings(true);
+    if (t === 'dm' && S && !S.isHost && !S.isDM) return setTab('story');
     if (t === 'char') charFilled = false;
     render();
     if (t === 'story') scrollLog();
@@ -159,9 +166,15 @@
 
   function render() {
     if (!S) return;
+    const aiMode = S.dmMode === 'ai';
     document.body.classList.toggle('is-dm', S.isDM);
+    document.body.classList.toggle('is-host', S.isHost);
+    document.body.classList.toggle('ai-mode', aiMode);
+    if (tab === 'dm' && !S.isHost && !S.isDM) setTab('story');
     $('#roomCode').textContent = S.code;
-    $('#themeChip').textContent = `${S.presets[S.settings.preset]} · ${S.settings.theme}`;
+    $('#themeChip').textContent = `${aiMode ? '🤖 AI DM · ' : ''}${S.presets[S.settings.preset]} · ${S.settings.theme}`;
+    $('#dmTabIcon').textContent = S.isDM ? '👑' : '⚙️';
+    $('#dmTabLabel').textContent = S.isDM ? 'DM' : 'ห้อง';
     const role = $('#roleChip');
     role.textContent = S.isDM ? '👑 DM' : `🧙 ${me()?.char?.name || me()?.name || ''}`;
     role.classList.toggle('dm', S.isDM);
@@ -171,8 +184,41 @@
     renderChar();
     renderDice();
     renderAsk();
+    renderAI();
     fillSettings(false);
   }
+
+  // ---------- AI DM ----------
+  function renderAI() {
+    const st = $('#aiStatus');
+    st.textContent = S.aiBusy ? 'AI DM กำลังคิด...' : S.aiError ? `⚠️ ${S.aiError}` : '🤖 AI เป็น DM';
+    st.classList.toggle('busy', S.aiBusy);
+    $('#aiRetry').classList.toggle('hidden', !S.aiError || S.aiBusy);
+    $('#aiContinue').disabled = S.aiBusy;
+    $('#aiSceneBtn').disabled = S.aiBusy;
+    const dmName = S.players.find((p) => p.id === S.dmId);
+    $('#modeNow').innerHTML = S.dmMode === 'ai'
+      ? 'ตอนนี้: <b>🤖 AI เป็น DM</b> (ทุกคนเป็นผู้เล่น)'
+      : `ตอนนี้: <b>👑 ${esc(dmName?.char?.name || dmName?.name || '-')}</b> เป็น DM`;
+    $('#toAI').disabled = !S.aiAvailable;
+    $('#toAIHint').textContent = S.aiAvailable ? 'DM คนปัจจุบันจะกลายเป็นผู้เล่น' : 'AI ยังไม่พร้อม: เซิร์ฟเวอร์ยังไม่มี GEMINI_API_KEY';
+    const pick = $('#dmPick');
+    if (document.activeElement !== pick) {
+      const v = pick.value || S.hostId;
+      pick.innerHTML = S.players.map((p) => `<option value="${p.id}">${esc(p.char?.name || p.name)}${p.id === S.you ? ' (ฉัน)' : ''}</option>`).join('');
+      pick.value = S.players.some((p) => p.id === v) ? v : S.you;
+    }
+  }
+  $('#aiContinue').onclick = () => socket.emit('ai_continue', { text: $('#chatInput').value.trim() }, () => ($('#chatInput').value = ''));
+  $('#aiRetry').onclick = () => socket.emit('ai_retry');
+  $('#aiSceneBtn').onclick = () => {
+    socket.emit('ai_scene', { idea: $('#aiIdea').value.trim() });
+    $('#aiIdea').value = '';
+    toast('AI กำลังสร้างฉาก...');
+    setTab('story');
+  };
+  $('#toAI').onclick = () => { if (confirm('ให้ AI เป็น DM แทน?')) socket.emit('set_dm_mode', { mode: 'ai' }); };
+  $('#toHuman').onclick = () => socket.emit('set_dm_mode', { mode: 'human', dmId: $('#dmPick').value });
 
   // ---------- story / log ----------
   function rollLine(r) {
@@ -182,6 +228,7 @@
       : `[${r.dice.join(', ')}]`;
     return `<span class="dice-line">${r.count}d${r.sides}${MODE[r.mode] ? ` (${MODE[r.mode]})` : ''} ${kept}${r.mod ? ` ${sign(r.mod)}` : ''} = <b>${r.total}</b></span>`;
   }
+  const dmLabel = () => (S?.dmMode === 'ai' ? '🤖 AI DM' : 'DM');
   function entryHTML(e) {
     switch (e.kind) {
       case 'system': return `<div class="entry system">${esc(e.text)}</div>`;
@@ -189,9 +236,9 @@
       case 'narrate': return `<div class="entry narrate">🗣️ ${esc(e.text)}</div>`;
       case 'chat': return `<div class="entry"><span class="who">${esc(e.name)}:</span> ${esc(e.text)}</div>`;
       case 'declare': return `<div class="entry"><span class="who">${esc(e.name)}</span> ต้องการ: “${esc(e.text)}”</div>`;
-      case 'deny': return `<div class="entry deny">🚫 DM: <b>${esc(e.name)}</b> ทำ “${esc(e.text)}” ไม่ได้<div class="note">${esc(e.note)}</div></div>`;
+      case 'deny': return `<div class="entry deny">🚫 ${dmLabel()}: <b>${esc(e.name)}</b> ทำ “${esc(e.text)}” ไม่ได้<div class="note">${esc(e.note)}</div></div>`;
       case 'auto': return `<div class="entry auto">✅ <b>${esc(e.name)}</b> ทำ “${esc(e.text)}” ได้เลย ไม่ต้องทอย${e.note ? `<div class="note">${esc(e.note)}</div>` : ''}</div>`;
-      case 'approve': return `<div class="entry approve">🎯 DM อนุญาตให้ <b>${esc(e.name)}</b> ลอง — ทอย D20${e.stat ? ` + ${esc(e.stat)}` : ''}${MODE[e.mode] ? ` (${MODE[e.mode]})` : ''} · DC ${e.dc ?? '???'}${e.note ? `<div class="note">${esc(e.note)}</div>` : ''}</div>`;
+      case 'approve': return `<div class="entry approve">🎯 ${dmLabel()} อนุญาตให้ <b>${esc(e.name)}</b> ลอง — ทอย D20${e.stat ? ` + ${esc(e.stat)}` : ''}${MODE[e.mode] ? ` (${MODE[e.mode]})` : ''} · DC ${e.dc ?? '???'}${e.note ? `<div class="note">${esc(e.note)}</div>` : ''}</div>`;
       case 'check': return `<div class="entry">🎲 <b>${esc(e.name)}</b> “${esc(e.text)}”${e.stat ? ` (${esc(e.stat)})` : ''}<br>${rollLine(e.roll)} vs DC ${e.dc} <span class="result ${e.outcome}">${OUTCOME[e.outcome]}</span></div>`;
       case 'roll': return `<div class="entry ${e.visibility === 'dm' ? 'hidden-roll' : ''}">🎲 <b>${esc(e.name)}</b>${e.visibility === 'dm' ? ' (ลับ)' : ''}${e.label ? ` — ${esc(e.label)}` : ''}<br>${rollLine(e.roll)}</div>`;
       default: return '';
@@ -240,7 +287,7 @@
       statSel.value = S.settings.stats.includes(v) ? v : '';
     }
     $('#declareHint').textContent = S.settings.requireApproval
-      ? 'DM จะตัดสินว่าทำได้ไหม และต้องทอยเต๋าหรือเปล่า'
+      ? S.dmMode === 'ai' ? '🤖 AI DM จะตัดสินให้ภายในไม่กี่วินาที' : 'DM จะตัดสินว่าทำได้ไหม และต้องทอยเต๋าหรือเปล่า'
       : `ห้องนี้ไม่ต้องรออนุมัติ — ทอย D20 ได้ทันที (DC ${S.settings.defaultDC})`;
 
     $('#actListTitle').textContent = S.isDM ? 'คิวการกระทำของผู้เล่น' : 'การกระทำของคุณ';
@@ -507,7 +554,7 @@
   $$('[data-pane="dm"] .card:last-child input, [data-pane="dm"] .card:last-child select, [data-pane="dm"] .card:last-child textarea')
     .forEach((el) => el.addEventListener('input', () => (settingsDirty = true)));
   function fillSettings(force) {
-    if (!S?.isDM || (settingsDirty && !force)) return;
+    if (!(S?.isDM || S?.isHost) || (settingsDirty && !force)) return;
     const s = S.settings;
     $('#setPreset').innerHTML = Object.entries(S.presets).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join('');
     $('#setPreset').value = s.preset;
