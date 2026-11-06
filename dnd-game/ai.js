@@ -3,7 +3,7 @@
 // AI_MOCK=1 uses canned answers (for local testing without a key).
 
 const MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest';
-const TIMEOUT_MS = 30000;
+const TIMEOUT_MS = 45000;
 
 class AIError extends Error {
   constructor(code, msg) {
@@ -22,7 +22,7 @@ function setProvider(fn) {
 }
 
 async function gemini(system, prompt) {
-  const key = process.env.GEMINI_API_KEY;
+  const key = (process.env.GEMINI_API_KEY || '').trim();
   if (!key) throw new AIError('nokey', 'ยังไม่ได้ใส่ GEMINI_API_KEY ในเซิร์ฟเวอร์');
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
@@ -39,7 +39,10 @@ async function gemini(system, prompt) {
       signal: ctrl.signal,
     });
   } catch (e) {
-    throw new AIError('network', 'ติดต่อ Gemini ไม่ได้');
+    console.error('Gemini fetch failed:', e.name, e.message, e.cause?.code || e.cause?.message || '');
+    if (e.name === 'AbortError') throw new AIError('network', 'Gemini ตอบช้าเกินไป (เกิน 45 วินาที) ลองใหม่อีกครั้ง');
+    if (/ByteString|header/i.test(e.message)) throw new AIError('nokey', 'API key มีตัวอักษรแปลกปน — ก๊อป key ใหม่แล้ววางอีกครั้ง');
+    throw new AIError('network', `ติดต่อ Gemini ไม่ได้ (${e.cause?.code || e.message})`);
   } finally {
     clearTimeout(t);
   }
@@ -195,4 +198,27 @@ function clampInt(v, min, max, def) {
   return Number.isFinite(x) ? Math.max(min, Math.min(max, x)) : def;
 }
 
-module.exports = { available, setProvider, newScene, reviewAction, narrateResult, answerQuestion, continueStory, AIError, MODEL };
+// Quick self-test for the /ai-check page. Never returns the key itself.
+let lastCheck = 0;
+async function check() {
+  const key = (process.env.GEMINI_API_KEY || '').trim();
+  const info = {
+    keySet: Boolean(key),
+    keyStartsWithAIza: key.startsWith('AIza'),
+    keyLength: key.length,
+    model: MODEL,
+    nodeVersion: process.version,
+  };
+  if (!key) return { ...info, ok: false, error: 'ยังไม่ได้ใส่ GEMINI_API_KEY ใน Render → Environment' };
+  if (Date.now() - lastCheck < 10000) return { ...info, ok: false, error: 'รอ 10 วินาทีแล้วรีเฟรชใหม่' };
+  lastCheck = Date.now();
+  try {
+    const out = await gemini('ตอบเป็น JSON เท่านั้น', 'ตอบ {"reply": "สวัสดี"}');
+    return { ...info, ok: true, reply: out };
+  } catch (e) {
+    return { ...info, ok: false, error: e.message };
+  }
+}
+
+module.exports = {
+  check, available, setProvider, newScene, reviewAction, narrateResult, answerQuestion, continueStory, AIError, MODEL };

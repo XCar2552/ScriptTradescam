@@ -11,6 +11,7 @@ const app = express();
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/health', (_req, res) => res.json({ ok: true, rooms: rooms.size }));
 app.get('/config', (_req, res) => res.json({ aiAvailable: ai.available() }));
+app.get('/ai-check', async (_req, res) => res.json(await ai.check()));
 
 const server = http.createServer(app);
 const io = new Server(server);
