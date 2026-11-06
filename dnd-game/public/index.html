@@ -32,8 +32,14 @@
     </div>
 
     <div class="card">
-      <h2>👑 สร้างห้อง (เป็น DM)</h2>
-      <label class="field">รูปแบบเกม
+      <h2>👑 สร้างห้อง</h2>
+      <div class="field">เลือกโลก/ธีม</div>
+      <div id="themePicker" class="theme-grid"></div>
+      <div id="customWorldFields" class="hidden">
+        <input id="worldNameInput" maxlength="60" placeholder="ชื่อโลก เช่น ‘หมู่บ้านต้องสาป’" />
+        <textarea id="worldLoreInput" rows="2" maxlength="2000" placeholder="เรื่องย่อของโลก (ไม่ใส่ก็ได้ ให้ DM หรือ AI เขียนทีหลัง)" style="margin-top:8px"></textarea>
+      </div>
+      <label class="field" id="presetField" style="margin-top:10px">รูปแบบเกม
         <select id="presetInput">
           <option value="classic">D&amp;D คลาสสิก (6 ค่าสถานะ)</option>
           <option value="simple">D20 แบบง่าย (ไม่มีค่าสถานะ)</option>
@@ -97,17 +103,6 @@
         </div>
         <h3 class="section-title" id="actListTitle">การกระทำ</h3>
         <div id="actionList"></div>
-      </div>
-
-      <!-- CHARACTER / PARTY -->
-      <div class="pane" data-pane="char">
-        <div id="charSheet"></div>
-        <h3 class="section-title">ปาร์ตี้</h3>
-        <div id="partyList"></div>
-      </div>
-
-      <!-- DICE -->
-      <div class="pane" data-pane="dice">
         <div class="card">
           <h2>🎲 ทอยเต๋าอิสระ</h2>
           <div class="dice-grid" id="diceGrid"></div>
@@ -124,6 +119,18 @@
           <label class="toggle dm-only"><input type="checkbox" id="diceHidden" /> ทอยลับ (เห็นแค่ DM)</label>
           <p class="muted small" id="diceHint"></p>
         </div>
+      </div>
+
+      <!-- CHARACTER / PARTY -->
+      <div class="pane" data-pane="char">
+        <div id="charSheet"></div>
+        <h3 class="section-title">ปาร์ตี้</h3>
+        <div id="partyList"></div>
+      </div>
+
+      <!-- WORLD -->
+      <div class="pane" data-pane="world">
+        <div id="worldView"></div>
       </div>
 
       <!-- ASK DM -->
@@ -175,6 +182,11 @@
           <textarea id="narrateInput" rows="2" maxlength="600" placeholder="เช่น ‘เสียงฝีเท้าดังมาจากทางเดินด้านซ้าย…’"></textarea>
           <button id="narrateSend" class="btn primary block">ส่งคำบรรยาย</button>
         </div>
+        <div class="card host-only">
+          <h2>🌍 เปลี่ยนโลก/ธีม</h2>
+          <p class="muted small">เปลี่ยนแล้ว เป้าหมาย มาตรวัด และแผนที่จะเริ่มใหม่</p>
+          <div class="row"><select id="themeSwitch"></select><button id="themeSwitchBtn" class="btn gold">เปลี่ยน</button></div>
+        </div>
         <div class="card">
           <h2>⚙️ ระบบเกม</h2>
           <label class="field">รูปแบบเกม <select id="setPreset"></select></label>
@@ -199,9 +211,9 @@
 
     <nav class="tabs" id="tabs">
       <button data-tab="story" class="active"><span>📖</span>เรื่องราว</button>
+      <button data-tab="world"><span>🗺️</span>โลก</button>
       <button data-tab="act"><span>⚔️</span>การกระทำ<i class="badge" id="actBadge"></i></button>
       <button data-tab="char"><span>🧙</span>ตัวละคร</button>
-      <button data-tab="dice"><span>🎲</span>ทอยเต๋า</button>
       <button data-tab="ask"><span>❓</span>ถาม DM<i class="badge" id="askBadge"></i></button>
       <button data-tab="dm" class="host-only"><span id="dmTabIcon">👑</span><b id="dmTabLabel" style="font-weight:inherit">DM</b></button>
     </nav>
@@ -214,9 +226,20 @@
     <div class="die-outcome" id="dieOutcome"></div>
   </div>
 
+  <div id="endingOverlay" class="overlay ending hidden">
+    <div class="ending-icon" id="endingIcon"></div>
+    <div class="ending-title" id="endingTitle"></div>
+    <div class="ending-text" id="endingText"></div>
+    <div class="btn-row">
+      <button id="endingContinue" class="btn gold hidden">▶️ เล่นต่อ</button>
+      <button id="endingClose" class="btn">ปิด</button>
+    </div>
+  </div>
+
   <div id="toast" class="toast hidden"></div>
 
   <script src="/socket.io/socket.io.js"></script>
+  <script src="art.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

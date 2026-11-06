@@ -93,7 +93,27 @@
     $('#home').classList.remove('active');
     $('#game').classList.add('active');
   }
+  let pickedTheme = 'pirate';
+  function renderPicker(cards) {
+    $('#themePicker').innerHTML = cards.map((c) => `
+      <button type="button" class="theme-card ${c.id === pickedTheme ? 'picked' : ''} ${c.soon ? 'soon' : ''}" data-theme="${c.id}" ${c.soon ? 'disabled' : ''}>
+        <div class="theme-art">${D20Art.banner(c.id)}</div>
+        <div class="theme-info"><b>${c.emoji} ${esc(c.name)}</b><span>${c.soon ? 'เร็วๆ นี้' : esc(c.genre)}</span>
+        <small>${esc(c.tagline)}</small></div>
+      </button>`).join('');
+    $('#customWorldFields').classList.toggle('hidden', pickedTheme !== 'custom');
+    $('#presetField').classList.toggle('hidden', pickedTheme !== 'custom');
+  }
+  let themeCards = [];
+  $('#themePicker').onclick = (e) => {
+    const b = e.target.closest('[data-theme]');
+    if (!b || b.disabled) return;
+    pickedTheme = b.dataset.theme;
+    renderPicker(themeCards);
+  };
   fetch('/config').then((r) => r.json()).then((c) => {
+    themeCards = c.themeCards || [];
+    renderPicker(themeCards);
     if (!c.aiAvailable) {
       $('#dmModeInput option[value="ai"]').disabled = true;
       $('#aiOffHint').classList.remove('hidden');
@@ -101,7 +121,12 @@
   }).catch(() => {});
   $('#createBtn').onclick = async () => {
     const name = getName();
-    if (name) enter(await emit('create_room', { name, playerId, preset: $('#presetInput').value, dmMode: $('#dmModeInput').value }));
+    if (name) {
+      enter(await emit('create_room', {
+        name, playerId, preset: $('#presetInput').value, dmMode: $('#dmModeInput').value,
+        themeId: pickedTheme, worldName: $('#worldNameInput').value, worldLore: $('#worldLoreInput').value,
+      }));
+    }
   };
   $('#joinBtn').onclick = async () => {
     const name = getName();
@@ -172,7 +197,7 @@
     document.body.classList.toggle('ai-mode', aiMode);
     if (tab === 'dm' && !S.isHost && !S.isDM) setTab('story');
     $('#roomCode').textContent = S.code;
-    $('#themeChip').textContent = `${aiMode ? '🤖 AI DM · ' : ''}${S.presets[S.settings.preset]} · ${S.settings.theme}`;
+    $('#themeChip').textContent = `${aiMode ? '🤖 ' : ''}${S.world?.emoji || ''} ${S.world?.name || S.settings.theme}`;
     $('#dmTabIcon').textContent = S.isDM ? '👑' : '⚙️';
     $('#dmTabLabel').textContent = S.isDM ? 'DM' : 'ห้อง';
     const role = $('#roleChip');
@@ -185,6 +210,8 @@
     renderDice();
     renderAsk();
     renderAI();
+    renderWorld();
+    renderEnding();
     fillSettings(false);
   }
 
@@ -232,6 +259,9 @@
   function entryHTML(e) {
     switch (e.kind) {
       case 'system': return `<div class="entry system">${esc(e.text)}</div>`;
+      case 'travel': return `<div class="entry travel">${esc(e.text)}</div>`;
+      case 'event': return `<div class="entry event">⚡ <b>อีเวนต์!</b> ${esc(e.text)}</div>`;
+      case 'ending': return `<div class="entry ending-log ${e.type}">${e.type === 'win' ? '🏆' : '💀'} <b>${e.type === 'win' ? 'ชนะ!' : 'พ่ายแพ้'}</b> ${esc(e.text)}</div>`;
       case 'scene': return `<div class="entry scene-log">🎬 <b>ฉากใหม่: ${esc(e.title)}</b><div>${esc(e.text)}</div></div>`;
       case 'narrate': return `<div class="entry narrate">🗣️ ${esc(e.text)}</div>`;
       case 'chat': return `<div class="entry"><span class="who">${esc(e.name)}:</span> ${esc(e.text)}</div>`;
@@ -400,6 +430,11 @@
         <h2>🧙 ตัวละครของฉัน</h2>
         <div class="row"><input id="cName" maxlength="40" placeholder="ชื่อตัวละคร" value="${esc(c.name)}">
         <input id="cCls" maxlength="40" placeholder="อาชีพ/เผ่า เช่น นักดาบเอลฟ์" value="${esc(c.cls)}"></div>
+        ${S.world?.roles?.length ? `<label class="field">เลือกบทบาทในโลกนี้ (ใส่โบนัสค่าสถานะให้อัตโนมัติ)
+          <select id="cRole"><option value="">— เลือก —</option>${S.world.roles.map((r) => `<option ${r.name === c.cls ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}</select></label>
+          <div id="roleInfo" class="muted small"></div>` : ''}
+        ${S.world?.powers ? `<label class="field">${esc(S.world.powers.title)} (ไม่บังคับ)
+          <select id="cPower"><option value="">— ไม่มี —</option>${S.world.powers.list.map((x) => `<option value="${esc(x.name)}" ${x.name === c.power ? 'selected' : ''}>${x.icon} ${esc(x.name)} — ${esc(x.desc)}</option>`).join('')}</select></label>` : ''}
         <div class="row"><label class="field tight">HP<input id="cHp" type="number" inputmode="numeric" min="0" value="${c.hp}"></label>
         <label class="field tight">HP สูงสุด<input id="cMax" type="number" inputmode="numeric" min="1" value="${c.maxHp}"></label></div>
         <div class="hpbar"><div style="width:${Math.round((c.hp / c.maxHp) * 100)}%"></div></div>
@@ -413,12 +448,29 @@
         <button id="charSave" class="btn gold block">บันทึกตัวละคร</button></div>`;
       charFilled = true;
       charDirty = false;
+      const roleSel = $('#cRole');
+      if (roleSel) {
+        const showRole = () => {
+          const r = S.world.roles.find((x) => x.name === roleSel.value);
+          $('#roleInfo').textContent = r ? `${r.icon} ${r.desc} · โบนัส: ${Object.entries(r.bonus).map(([k, v]) => `${k} +${v}`).join(', ')} · ของเริ่มต้น: ${r.item}` : '';
+        };
+        showRole();
+        roleSel.onchange = () => {
+          const r = S.world.roles.find((x) => x.name === roleSel.value);
+          showRole();
+          if (!r) return;
+          $('#cCls').value = r.name;
+          $$('[data-stat]', sheet).forEach((i) => (i.value = r.bonus[i.dataset.stat] || 0));
+          const inv = $('#cInv');
+          if (!inv.value.trim()) inv.value = r.item;
+        };
+      }
       $('#charSave').onclick = () => {
         const stats = {};
         $$('[data-stat]', sheet).forEach((i) => (stats[i.dataset.stat] = i.value));
         socket.emit('update_char', {
           name: $('#cName').value, cls: $('#cCls').value, hp: $('#cHp').value, maxHp: $('#cMax').value,
-          inventory: $('#cInv').value, notes: $('#cNotes').value, stats,
+          inventory: $('#cInv').value, notes: $('#cNotes').value, stats, power: $('#cPower') ? $('#cPower').value : undefined,
         });
         charFilled = false;
         charDirty = false;
@@ -558,6 +610,7 @@
     const s = S.settings;
     $('#setPreset').innerHTML = Object.entries(S.presets).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join('');
     $('#setPreset').value = s.preset;
+    $('#themeSwitch').innerHTML = (S.themeCards || []).filter((c) => !c.soon).map((c) => `<option value="${c.id}" ${c.id === S.world?.themeId ? 'selected' : ''}>${c.emoji} ${esc(c.name)}</option>`).join('');
     const themes = S.themes.includes(s.theme) ? S.themes : [...S.themes, s.theme];
     $('#setTheme').innerHTML = themes.map((t) => `<option>${esc(t)}</option>`).join('');
     $('#setTheme').value = s.theme;
@@ -607,5 +660,203 @@
     socket.emit('narrate', { text });
     $('#narrateInput').value = '';
     toast('ส่งคำบรรยายแล้ว');
+  };
+
+  // ---------- WORLD ----------
+  let selIsland = null;
+  const wd = {}; // drafts for world inputs
+  const openDet = new Set(['lore']); // which <details> sections are open
+  const det = (k) => `data-det="${k}" ${openDet.has(k) ? 'open' : ''}`;
+  const ROLE = { ally: ['พันธมิตร', 'ally'], villain: ['ตัวร้าย', 'villain'], neutral: ['ฝ่ายกลาง', 'neutral'] };
+  const stars = (n) => '★'.repeat(n) + '☆'.repeat(5 - n);
+
+  function mapSVG(w) {
+    const pts = w.islands.map((i) => [i.x, i.y * 0.62]);
+    const path = pts.map((p, k) => `${k ? 'L' : 'M'}${p[0]} ${p[1]}`).join(' ');
+    return `<svg viewBox="0 0 100 62" class="route-map" role="img" aria-label="แผนที่เส้นทาง">
+      <defs><radialGradient id="seaG" cx=".5" cy=".4" r=".8"><stop offset="0" stop-color="#1f5d96"/><stop offset="1" stop-color="#0b1d3a"/></radialGradient></defs>
+      <rect width="100" height="62" rx="3" fill="url(#seaG)"/>
+      <g stroke="#ffffff22" stroke-width=".2" fill="none">${[10, 20, 30, 40, 50].map((y) => `<path d="M0 ${y} Q25 ${y - 2} 50 ${y} T100 ${y}"/>`).join('')}</g>
+      <path d="${path}" stroke="#f2e6cc" stroke-width=".5" stroke-dasharray="1.4 1.2" fill="none" opacity=".75"/>
+      ${w.islands.map((i) => {
+        const here = i.id === S.location;
+        const seen = S.visited.includes(i.id);
+        const sel = i.id === selIsland;
+        const y = i.y * 0.62;
+        return `<g class="isl" data-island="${i.id}" style="cursor:pointer">
+          <circle cx="${i.x}" cy="${y}" r="${sel ? 4.6 : 4}" fill="${seen ? '#e9d29a' : '#3a4b66'}" stroke="${sel ? '#fff' : here ? '#e8b04a' : '#0b1d3a'}" stroke-width="${sel || here ? .8 : .4}"/>
+          <text x="${i.x}" y="${y + 1.5}" text-anchor="middle" font-size="4">${seen || S.isDM ? i.emoji : '❔'}</text>
+          <text x="${i.x}" y="${y + 7.6}" text-anchor="middle" font-size="2.4" fill="#fff" opacity="${seen ? 1 : .6}">${esc(i.name.length > 16 ? i.name.slice(0, 15) + '…' : i.name)}</text>
+          ${here ? `<text x="${i.x + 4}" y="${y - 3}" font-size="4.5">⛵</text>` : ''}
+        </g>`;
+      }).join('')}
+    </svg>`;
+  }
+
+  function trackerHTML(t) {
+    const pct = t.max >= 9999 ? 100 : Math.round((t.value / t.max) * 100);
+    const danger = t.loseAt !== undefined && (t.loseAt === 0 ? t.value <= Math.ceil(t.max * 0.3) : t.value >= Math.floor(t.max * 0.7));
+    return `<div class="tracker ${danger ? 'danger' : ''}">
+      <div class="tracker-head"><span>${t.icon || '📊'} ${esc(t.name)}</span><b>${t.value}${t.max < 9999 ? ` / ${t.max}` : ''}</b></div>
+      ${t.max < 9999 ? `<div class="hpbar"><div style="width:${pct}%"></div></div>` : ''}
+      ${t.loseAt !== undefined ? `<div class="muted small">แพ้เมื่อถึง ${t.loseAt}</div>` : ''}
+      ${S.canGM ? `<div class="btn-row"><button class="btn small" data-tr="${t.id}" data-d="-1">−1</button><button class="btn small" data-tr="${t.id}" data-d="1">+1</button>
+        ${t.max >= 100 ? `<button class="btn small" data-tr="${t.id}" data-d="10">+10</button>` : ''}
+        <button class="btn small ghost-btn" data-trdel="${t.id}" title="ลบ">🗑️</button></div>` : ''}
+    </div>`;
+  }
+
+  function npcCard(n) {
+    const [label, cls] = ROLE[n.role] || ROLE.neutral;
+    return `<div class="npc ${cls}"><div class="npc-icon">${n.icon}</div><div>
+      <b>${esc(n.name)}</b> <span class="tag ${cls}">${label}</span><div class="muted small">${esc(n.title)}</div>
+      <div class="small">${esc(n.desc)}</div>
+      ${n.secret ? `<div class="secret small">🔒 ${esc(n.secret)}</div>` : ''}</div></div>`;
+  }
+
+  function renderWorld() {
+    const box = $('#worldView');
+    const w = S.world;
+    if (!w) { box.innerHTML = ''; return; }
+    if (!selIsland || !w.islands.some((i) => i.id === selIsland)) selIsland = S.location;
+    const isl = w.islands.find((i) => i.id === selIsland);
+    const gm = S.canGM;
+    const canTravel = isl && isl.id !== S.location && (S.isDM || S.dmMode === 'ai');
+    const v = (k) => esc(wd[k] ?? '');
+    const npcs = isl ? w.npcs.filter((n) => n.island === isl.id) : [];
+    const html = `
+      <div class="world-banner">${D20Art.banner(w.themeId)}<div class="world-title"><b>${w.emoji} ${esc(w.name)}</b><span>${esc(w.genre)}</span></div></div>
+      ${S.ending ? `<div class="card ending-card ${S.ending.type}"><b>${S.ending.type === 'win' ? '🏆 ชนะแล้ว!' : '💀 พ่ายแพ้'}</b> ${esc(S.ending.text)}</div>` : ''}
+      ${w.lore ? `<details class="card lore" ${det('lore')}><summary>📜 ตำนานของโลกนี้</summary><p>${esc(w.lore)}</p></details>` : ''}
+      ${w.themeId === 'custom' && gm ? `<div class="card"><h2>✏️ ข้อมูลโลก</h2>
+        <input data-key="w:name" data-w="w:name" maxlength="60" placeholder="ชื่อโลก" value="${esc(wd['w:name'] ?? w.name)}">
+        <textarea data-key="w:lore" data-w="w:lore" rows="3" maxlength="2000" placeholder="ตำนาน/เรื่องย่อ" style="margin-top:8px">${esc(wd['w:lore'] ?? w.lore)}</textarea>
+        <button class="btn gold block" data-act="worldInfo" style="margin-top:8px">บันทึกข้อมูลโลก</button></div>` : ''}
+
+      <div class="card"><h2>🎯 เป้าหมาย</h2>
+        <div class="goal-head good">🏆 ชนะเมื่อทำครบทุกข้อ</div>
+        ${S.goals.win.length ? S.goals.win.map((g) => `<div class="goal ${g.done ? 'done' : ''}">
+          ${gm ? `<input type="checkbox" data-goal="${g.id}" ${g.done ? 'checked' : ''}>` : `<span>${g.done ? '✅' : '⬜'}</span>`}
+          <span>${esc(g.text)}</span>${gm ? `<button class="x" data-goaldel="${g.id}">✕</button>` : ''}</div>`).join('') : '<p class="muted small">ยังไม่มีเป้าหมาย</p>'}
+        <div class="goal-head bad">💀 แพ้เมื่อเกิดข้อใดข้อหนึ่ง</div>
+        ${S.goals.lose.length ? S.goals.lose.map((g) => `<div class="goal"><span>⚠️</span><span>${esc(g.text)}</span>${gm ? `<button class="x" data-goaldel="${g.id}">✕</button>` : ''}</div>`).join('') : '<p class="muted small">ยังไม่มีเงื่อนไขแพ้</p>'}
+        ${gm ? `<div class="row"><select data-key="g:list" data-w="g:list"><option value="win" ${wd['g:list'] !== 'lose' ? 'selected' : ''}>เป้าหมายชนะ</option><option value="lose" ${wd['g:list'] === 'lose' ? 'selected' : ''}>เงื่อนไขแพ้</option></select></div>
+          <div class="row"><input data-key="g:text" data-w="g:text" maxlength="200" placeholder="เขียนเป้าหมายเอง..." value="${v('g:text')}"><button class="btn primary small" data-act="goalAdd">เพิ่ม</button></div>
+          ${S.aiAvailable ? `<div class="row"><input data-key="g:idea" data-w="g:idea" maxlength="600" placeholder="ไอเดียให้ AI (ไม่ใส่ก็ได้)" value="${v('g:idea')}"><button class="btn small" data-act="aiGoals" ${S.aiBusy ? 'disabled' : ''}>🤖 ให้ AI เขียน</button></div>
+          <p class="muted small">AI จะเขียนเป้าหมายใหม่ทั้งหมดแทนของเดิม</p>` : ''}
+          <div class="btn-row"><button class="btn good small" data-act="win">🏆 ประกาศชนะ</button><button class="btn bad small" data-act="lose">💀 ประกาศแพ้</button></div>` : ''}
+      </div>
+
+      ${S.trackers.length || gm ? `<div class="card"><h2>📊 มาตรวัด</h2>${S.trackers.map(trackerHTML).join('')}
+        ${gm ? `<details class="add-tracker" ${det('addtr')}><summary class="small">+ เพิ่มมาตรวัด</summary>
+          <div class="row"><input data-key="t:name" data-w="t:name" maxlength="40" placeholder="ชื่อ เช่น ความหิว" value="${v('t:name')}"></div>
+          <div class="row"><input data-key="t:value" data-w="t:value" type="number" inputmode="numeric" placeholder="เริ่ม" value="${v('t:value')}"><input data-key="t:max" data-w="t:max" type="number" inputmode="numeric" placeholder="สูงสุด" value="${v('t:max')}"></div>
+          <div class="row"><select data-key="t:lose" data-w="t:lose"><option value="">ไม่มีผลแพ้</option><option value="zero" ${wd['t:lose'] === 'zero' ? 'selected' : ''}>แพ้เมื่อเหลือ 0</option><option value="max" ${wd['t:lose'] === 'max' ? 'selected' : ''}>แพ้เมื่อเต็ม</option></select>
+          <button class="btn primary small" data-act="trackerAdd">เพิ่ม</button></div></details>` : ''}</div>` : ''}
+
+      ${w.islands.length ? `<div class="card"><h2>🗺️ แผนที่เส้นทาง</h2>${mapSVG(w)}
+        <p class="muted small">แตะเกาะเพื่อดูรายละเอียด · ⛵ = ตำแหน่งปัจจุบัน · ❔ = ยังไม่เคยไป</p></div>` : ''}
+
+      ${isl ? `<div class="card place">
+        <div class="place-head"><span class="place-emoji">${isl.unknown && !S.isDM ? '❔' : isl.emoji}</span><div>
+          <h2>${esc(isl.name)} ${isl.id === S.location ? '<span class="tag here">อยู่ที่นี่</span>' : ''}</h2>
+          <div class="muted small">${esc(isl.kind)} · อันตราย <span class="stars">${stars(isl.danger)}</span>${isl.mapPiece && S.isDM ? ' · 🗺️ มีเศษแผนที่' : ''}</div></div></div>
+        ${isl.unknown ? `<p>${esc(isl.summary)}</p><p class="muted small">ยังไม่เคยไป — ต้องไปถึงก่อนถึงจะรู้รายละเอียด</p>` : `
+          <p>${esc(isl.desc)}</p>
+          <h3 class="section-title">📍 สถานที่สำคัญ</h3>
+          <div class="landmarks">${isl.landmarks.map((l) => `<div class="landmark"><b>${esc(l.name)}</b><span class="small muted">${esc(l.desc)}</span></div>`).join('')}</div>
+          ${npcs.length ? `<h3 class="section-title">👥 ตัวละครบนเกาะ</h3>${npcs.map(npcCard).join('')}` : ''}
+          ${isl.secret ? `<div class="secret"><b>🔒 ความลับ (เห็นแค่ DM)</b><br>${esc(isl.secret)}</div>` : ''}
+          ${isl.events ? `<h3 class="section-title">⚡ อีเวนต์ที่อาจเกิด (เห็นแค่ DM)</h3><ul class="small">${isl.events.map((e) => `<li>${esc(e)}</li>`).join('')}</ul>` : ''}`}
+        ${canTravel ? `<button class="btn gold block" data-act="travel" ${S.aiBusy ? 'disabled' : ''}>⛵ ${S.dmMode === 'ai' ? 'ออกเรือไปที่นี่' : 'พาลูกเรือไปที่นี่'}</button>` : ''}
+        ${isl.id === S.location && gm && !isl.unknown ? `<button class="btn primary block" data-act="event" style="margin-top:8px" ${S.aiBusy ? 'disabled' : ''}>🎲 สุ่มอีเวนต์</button>` : ''}
+      </div>` : ''}
+
+      ${w.factions?.length ? `<div class="card"><h2>⚑ ฝ่ายต่างๆ</h2>${w.factions.map((f) => `<div class="landmark"><b>${f.icon} ${esc(f.name)}</b><span class="small muted">${esc(f.desc)}</span></div>`).join('')}</div>` : ''}
+      ${w.npcs.length ? `<details class="card" ${det('npcs')}><summary><b>📖 สมุดรายชื่อตัวละคร (${w.npcs.length})</b></summary>
+        ${['ally', 'villain', 'neutral'].map((r) => {
+          const list = w.npcs.filter((n) => n.role === r);
+          return list.length ? `<h3 class="section-title">${ROLE[r][0]}</h3>${list.map(npcCard).join('')}` : '';
+        }).join('')}
+        ${!S.isDM ? '<p class="muted small">ตัวละครจะปรากฏเมื่อเดินทางไปถึงเกาะของพวกเขา</p>' : ''}</details>` : ''}
+      ${w.roles?.length ? `<details class="card" ${det('roles')}><summary><b>🧭 บทบาทลูกเรือ</b></summary>${w.roles.map((r) => `<div class="landmark"><b>${r.icon} ${esc(r.name)}</b><span class="small muted">${esc(r.desc)} · โบนัส ${Object.entries(r.bonus).map(([k, x]) => `${esc(k)} +${x}`).join(', ')}</span></div>`).join('')}</details>` : ''}
+      ${w.powers ? `<details class="card" ${det('powers')}><summary><b>💎 ${esc(w.powers.title)}</b></summary><p class="small">${esc(w.powers.rule)}</p>${w.powers.list.map((x) => `<div class="landmark"><b>${x.icon} ${esc(x.name)}</b><span class="small muted">${esc(x.desc)}</span></div>`).join('')}</details>` : ''}`;
+    patch(box, html);
+  }
+
+  $('#worldView').addEventListener('toggle', (e) => {
+    const k = e.target.dataset?.det;
+    if (k) e.target.open ? openDet.add(k) : openDet.delete(k);
+  }, true);
+  $('#worldView').addEventListener('input', (e) => { if (e.target.dataset.w) wd[e.target.dataset.w] = e.target.value; });
+  $('#worldView').addEventListener('change', (e) => {
+    const t = e.target;
+    if (t.dataset.w) wd[t.dataset.w] = t.value;
+    if (t.dataset.goal) socket.emit('goal_toggle', { id: t.dataset.goal });
+  });
+  $('#worldView').addEventListener('click', (e) => {
+    const isl = e.target.closest('[data-island]');
+    if (isl) { selIsland = isl.dataset.island; renderWorld(); return; }
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.dataset.tr) return socket.emit('tracker', { id: b.dataset.tr, delta: Number(b.dataset.d) });
+    if (b.dataset.trdel) return confirm('ลบมาตรวัดนี้?') && socket.emit('tracker_remove', { id: b.dataset.trdel });
+    if (b.dataset.goaldel) return socket.emit('goal_remove', { id: b.dataset.goaldel });
+    switch (b.dataset.act) {
+      case 'travel': socket.emit('travel', { islandId: selIsland }); toast('ออกเรือ! ⛵'); setTab('story'); break;
+      case 'event': socket.emit('random_event'); setTab('story'); break;
+      case 'goalAdd':
+        if (!(wd['g:text'] || '').trim()) return toast('เขียนเป้าหมายก่อน', 'error');
+        socket.emit('goal_add', { list: wd['g:list'] || 'win', text: wd['g:text'] });
+        wd['g:text'] = '';
+        break;
+      case 'aiGoals':
+        if (S.goals.win.length && !confirm('ให้ AI เขียนเป้าหมายใหม่แทนของเดิม?')) return;
+        socket.emit('ai_goals', { idea: wd['g:idea'] || '' });
+        wd['g:idea'] = '';
+        toast('AI กำลังเขียนเป้าหมาย...');
+        break;
+      case 'trackerAdd':
+        if (!(wd['t:name'] || '').trim()) return toast('ตั้งชื่อมาตรวัดก่อน', 'error');
+        socket.emit('tracker_add', { name: wd['t:name'], value: wd['t:value'] || 0, max: wd['t:max'] || 10, loseAt: wd['t:lose'] || '' });
+        for (const k of ['t:name', 't:value', 't:max', 't:lose']) delete wd[k];
+        break;
+      case 'win': case 'lose': {
+        const text = prompt(b.dataset.act === 'win' ? 'ข้อความตอนชนะ (ไม่ใส่ก็ได้)' : 'ข้อความตอนแพ้ (ไม่ใส่ก็ได้)');
+        if (text !== null) socket.emit('ending', { type: b.dataset.act, text });
+        break;
+      }
+      case 'worldInfo':
+        socket.emit('world_info', { name: wd['w:name'] ?? S.world.name, lore: wd['w:lore'] ?? S.world.lore });
+        delete wd['w:name']; delete wd['w:lore'];
+        toast('บันทึกแล้ว');
+        break;
+      default:
+    }
+  });
+
+  // ---------- ENDING ----------
+  let endingSeen = null;
+  function renderEnding() {
+    const ov = $('#endingOverlay');
+    const e = S.ending;
+    if (!e) { ov.classList.add('hidden'); endingSeen = null; return; }
+    if (endingSeen === e.ts) return;
+    ov.className = `overlay ending ${e.type}`;
+    $('#endingIcon').textContent = e.type === 'win' ? '🏆' : '💀';
+    $('#endingTitle').textContent = e.type === 'win' ? 'ชัยชนะ!' : 'พ่ายแพ้...';
+    $('#endingText').textContent = e.text;
+    $('#endingContinue').classList.toggle('hidden', !S.canGM);
+    if (navigator.vibrate) navigator.vibrate(e.type === 'win' ? [80, 60, 80, 60, 200] : [300]);
+  }
+  $('#endingClose').onclick = () => { endingSeen = S.ending?.ts; $('#endingOverlay').classList.add('hidden'); };
+  $('#endingContinue').onclick = () => { socket.emit('ending', { type: 'clear' }); };
+
+  // ---------- Theme switch (host) ----------
+  $('#themeSwitchBtn').onclick = () => {
+    const id = $('#themeSwitch').value;
+    if (!confirm('เปลี่ยนโลก? เป้าหมาย มาตรวัด และแผนที่จะเริ่มใหม่')) return;
+    socket.emit('set_theme', { themeId: id });
+    toast('เปลี่ยนโลกแล้ว');
   };
 })();

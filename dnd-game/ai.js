@@ -108,8 +108,9 @@ function mock(kind) {
   switch (kind) {
     case 'scene': return { title: 'ประตูหินโบราณ', text: 'พวกคุณยืนอยู่หน้าประตูหินที่สลักอักษรเรืองแสง ลมเย็นพัดออกมาจากรอยแยก มีเสียงหยดน้ำดังก้องอยู่ข้างใน' };
     case 'review': return { decision: 'roll', dc: 13, stat: '', mode: 'normal', note: 'ลองดู แต่ไม่ง่ายนะ' };
-    case 'result': return { narration: 'ผลลัพธ์เป็นไปตามลูกเต๋า เรื่องราวเดินต่อไป...', hp_changes: [] };
+    case 'result': return { narration: 'ผลลัพธ์เป็นไปตามลูกเต๋า เรื่องราวเดินต่อไป...', hp_changes: [], tracker_changes: [{ id: 'bounty', delta: 5 }] };
     case 'answer': return { answer: 'ลองสำรวจรอบๆ ดูก่อน อาจเจอเบาะแส' };
+    case 'goals': return { win: ['หาคัมภีร์ที่หายไป', 'กลับถึงบ้านอย่างปลอดภัย'], lose: ['ทุกคน HP 0'] };
     default: return { narration: 'เสียงบางอย่างดังขึ้นจากความมืด... พวกคุณจะทำอย่างไร?' };
   }
 }
@@ -153,7 +154,47 @@ function context(room) {
     .map(logLine)
     .filter(Boolean)
     .join('\n');
-  return `ฉากปัจจุบัน: ${room.scene.title}\n${room.scene.text}\n\nปาร์ตี้:\n${party || '(ยังไม่มีผู้เล่น)'}\n\nเหตุการณ์ล่าสุด:\n${recent || '(ยังไม่มี)'}`;
+  return `${worldContext(room)}ฉากปัจจุบัน: ${room.scene.title}\n${room.scene.text}\n\nปาร์ตี้:\n${party || '(ยังไม่มีผู้เล่น)'}\n\nเหตุการณ์ล่าสุด:\n${recent || '(ยังไม่มี)'}`;
+}
+
+// Everything the AI DM needs to know about the world, including DM-only secrets.
+function worldContext(room) {
+  const w = room.world;
+  if (!w) return '';
+  const lines = [`=== โลก: ${w.name} (${w.genre}) ===`];
+  if (w.lore) lines.push(`ตำนาน: ${w.lore}`);
+  const here = w.islands.find((i) => i.id === room.location);
+  if (w.islands.length) {
+    lines.push(`เส้นทาง: ${w.islands.map((i) => `${i.name}${i.id === room.location ? ' [อยู่ที่นี่]' : room.visited.includes(i.id) ? ' [เคยไป]' : ''}`).join(' → ')}`);
+  }
+  if (here) {
+    lines.push(`สถานที่ปัจจุบัน: ${here.name} (${here.kind}, อันตราย ${here.danger}/5) — ${here.desc}`);
+    lines.push(`จุดสำคัญ: ${here.landmarks.map((l) => `${l.name} (${l.desc})`).join('; ')}`);
+    const npcs = w.npcs.filter((n) => n.island === here.id);
+    if (npcs.length) lines.push(`ตัวละครที่นี่: ${npcs.map((n) => `${n.name} [${n.role === 'villain' ? 'ตัวร้าย' : n.role === 'ally' ? 'พันธมิตร' : 'กลาง'}] ${n.title}: ${n.desc} (ลับ: ${n.secret})`).join(' | ')}`);
+    lines.push(`อีเวนต์ที่อาจเกิด: ${here.events.join('; ')}`);
+    lines.push(`ความลับของสถานที่ (ห้ามบอกผู้เล่นตรงๆ): ${here.secret}`);
+  }
+  if (w.powers) lines.push(`ระบบพลัง: ${w.powers.title} — ${w.powers.rule}`);
+  if (w.factions?.length) lines.push(`ฝ่ายต่างๆ: ${w.factions.map((f) => `${f.name}: ${f.desc}`).join('; ')}`);
+  if (room.trackers.length) lines.push(`มาตรวัด (id: ค่า/สูงสุด): ${room.trackers.map((t) => `${t.id} "${t.name}": ${t.value}/${t.max}${t.loseAt !== undefined ? ` (แพ้เมื่อ=${t.loseAt})` : ''}`).join(', ')}`);
+  if (room.goals.win.length) lines.push(`เป้าหมายชนะ (id): ${room.goals.win.map((g) => `${g.id} "${g.text}"${g.done ? ' [สำเร็จแล้ว]' : ''}`).join(', ')}`);
+  if (room.goals.lose.length) lines.push(`เงื่อนไขแพ้: ${room.goals.lose.map((g) => g.text).join(', ')}`);
+  return `${lines.join('\n')}\n\n`;
+}
+
+const EFFECTS_SCHEMA =
+  '"tracker_changes": [{"id": "id ของมาตรวัด", "delta": ตัวเลข}], "goals_completed": ["id ของเป้าหมายชนะที่เพิ่งสำเร็จ"]';
+const EFFECTS_RULE =
+  ' ถ้าเรื่องที่เล่าทำให้มาตรวัดเปลี่ยน (เช่น ได้เศษแผนที่, ทหารเรือตามล่ามากขึ้น, เรือเสียหาย, ค่าหัวขึ้น) ให้ใส่ใน tracker_changes ' +
+  'และถ้าเป้าหมายชนะข้อไหนสำเร็จจริงให้ใส่ใน goals_completed (อย่าใส่ถ้ายังไม่สำเร็จจริง) ';
+
+function effects(out) {
+  const trackerChanges = Array.isArray(out.tracker_changes)
+    ? out.tracker_changes.slice(0, 6).map((t) => ({ id: str(t?.id, 40), delta: clampInt(t?.delta, -10, 10, 0) })).filter((t) => t.id && t.delta)
+    : [];
+  const goalsCompleted = Array.isArray(out.goals_completed) ? out.goals_completed.slice(0, 5).map((g) => str(g, 20)).filter(Boolean) : [];
+  return { hpChanges: hpList(out.hp_changes), trackerChanges, goalsCompleted };
 }
 
 function logLine(e) {
@@ -200,9 +241,10 @@ async function reviewAction(room, action) {
 async function narrateResult(room, action) {
   const out = await ask('result', systemPrompt(room),
     `${context(room)}\n\n"${action.playerName}" พยายาม: "${action.text}" ทอยได้ ${action.roll.total} (ลูกเต๋า ${action.roll.natural ?? action.roll.kept}) vs DC ${action.dc} ผลคือ: ${OUT[action.outcome]}\n` +
-    'เล่าผลที่เกิดขึ้นให้ตรงกับผลลูกเต๋า (สำเร็จขั้นสุดให้ผลดีเกินคาด, พลาดขั้นสุดให้เกิดเรื่องวุ่น) ถ้ามีคนบาดเจ็บหรือฟื้นพลังให้ใส่ใน hp_changes ' +
-    'ตอบ JSON: {"narration": "คำบรรยาย", "hp_changes": [{"name": "ชื่อตัวละคร", "delta": ตัวเลข -20 ถึง 20}]}');
-  return { narration: str(out.narration, 800) || '...', hpChanges: hpList(out.hp_changes) };
+    'เล่าผลที่เกิดขึ้นให้ตรงกับผลลูกเต๋า (สำเร็จขั้นสุดให้ผลดีเกินคาด, พลาดขั้นสุดให้เกิดเรื่องวุ่น) ถ้ามีคนบาดเจ็บหรือฟื้นพลังให้ใส่ใน hp_changes' +
+    EFFECTS_RULE +
+    `ตอบ JSON: {"narration": "คำบรรยาย", "hp_changes": [{"name": "ชื่อตัวละคร", "delta": ตัวเลข -20 ถึง 20}], ${EFFECTS_SCHEMA}}`);
+  return { narration: str(out.narration, 800) || '...', ...effects(out) };
 }
 
 async function answerQuestion(room, q) {
@@ -214,8 +256,19 @@ async function answerQuestion(room, q) {
 async function continueStory(room, request) {
   const out = await ask('continue', systemPrompt(room),
     `${context(room)}\n\n${request ? `ผู้เล่นขอว่า: ${request}\n` : ''}เล่าเหตุการณ์ต่อไปสั้นๆ ให้เรื่องเดินหน้า (เช่น มีคนโผล่มา เกิดเสียง เจอเบาะแส) แล้วถามว่าผู้เล่นจะทำอะไร ` +
-    'ตอบ JSON: {"narration": "คำบรรยาย", "hp_changes": []}');
-  return { narration: str(out.narration, 800) || '...', hpChanges: hpList(out.hp_changes) };
+    EFFECTS_RULE +
+    `ตอบ JSON: {"narration": "คำบรรยาย", "hp_changes": [], ${EFFECTS_SCHEMA}}`);
+  return { narration: str(out.narration, 800) || '...', ...effects(out) };
+}
+
+async function writeGoals(room, idea) {
+  const out = await ask('goals', systemPrompt(room),
+    `${context(room)}\n\n${idea ? `ไอเดียจากผู้เล่น: ${idea}\n` : ''}เขียนเป้าหมายของเกมนี้ให้ชัดเจนและวัดผลได้: เป้าหมายชนะ 2-4 ข้อ (ต้องทำครบทุกข้อถึงชนะ) และเงื่อนไขแพ้ 2-3 ข้อ ` +
+    'ตอบ JSON: {"win": ["เป้าหมาย 1", "..."], "lose": ["เงื่อนไขแพ้ 1", "..."]}');
+  const list = (v, n) => (Array.isArray(v) ? v.map((x) => str(x, 200)).filter(Boolean).slice(0, n) : []);
+  const g = { win: list(out.win, 5), lose: list(out.lose, 4) };
+  if (!g.win.length) throw new AIError('bad_output', 'AI เขียนเป้าหมายไม่สำเร็จ ลองใหม่อีกครั้ง');
+  return g;
 }
 
 function hpList(v) {
@@ -252,4 +305,4 @@ async function check() {
 }
 
 module.exports = {
-  check, available, setProvider, newScene, reviewAction, narrateResult, answerQuestion, continueStory, AIError, gemini, _setFetch: (f) => (global.fetch = f) };
+  check, available, setProvider, writeGoals, newScene, reviewAction, narrateResult, answerQuestion, continueStory, AIError, gemini, _setFetch: (f) => (global.fetch = f) };

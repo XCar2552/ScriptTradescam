@@ -6,11 +6,12 @@ const http = require('http');
 const express = require('express');
 const { Server } = require('socket.io');
 const ai = require('./ai');
+const themes = require('./themes');
 
 const app = express();
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/health', (_req, res) => res.json({ ok: true, rooms: rooms.size }));
-app.get('/config', (_req, res) => res.json({ aiAvailable: ai.available() }));
+app.get('/config', (_req, res) => res.json({ aiAvailable: ai.available(), themeCards: require('./themes').CARDS }));
 app.get('/ai-check', async (_req, res) => res.json(await ai.check()));
 
 const server = http.createServer(app);
@@ -45,6 +46,7 @@ const THEMES = ['แฟนตาซี', 'ไซไฟ', 'สยองขวั�
 
 const rooms = new Map();
 const LIMITS = { name: 40, text: 600, scene: 2000, log: 300 };
+const ENDING_TEXT = { win: '🏆 ชนะ!', lose: '💀 พ่ายแพ้...' };
 
 const clip = (v, n) => String(v ?? '').trim().slice(0, n);
 const int = (v, min, max, def) => {
@@ -100,6 +102,86 @@ function addLog(room, entry) {
   if (room.log.length > LIMITS.log) room.log.splice(0, room.log.length - LIMITS.log);
 }
 
+// ---------- Themes / world ----------
+function applyTheme(room, themeId, custom) {
+  const b = themes.buildWorld(themeId, custom);
+  room.world = b.world;
+  room.goals = b.goals;
+  room.trackers = b.trackers;
+  room.location = b.location;
+  room.visited = b.location ? [b.location] : [];
+  room.ending = null;
+  const s = room.settings;
+  if (b.world.stats) {
+    Object.assign(s, { preset: 'custom', statMode: 'direct', stats: [...b.world.stats] });
+    for (const pl of Object.values(room.players)) {
+      if (pl.char) pl.char.stats = Object.fromEntries(s.stats.map((k) => [k, 0]));
+    }
+  }
+  s.theme = b.world.name;
+  if (b.world.opening) room.scene = { ...b.world.opening };
+}
+
+const island = (room, id) => room.world?.islands.find((i) => i.id === id);
+
+function moveTo(room, id) {
+  const isl = island(room, id);
+  if (!isl) return null;
+  room.location = id;
+  if (!room.visited.includes(id)) room.visited.push(id);
+  addLog(room, { kind: 'travel', text: `⛵ ลูกเรือเดินทางถึง ${isl.emoji} ${isl.name}` });
+  return isl;
+}
+
+function setTracker(room, id, value) {
+  const t = room.trackers.find((x) => x.id === id);
+  if (!t) return;
+  const before = t.value;
+  t.value = Math.max(0, Math.min(t.max, value));
+  if (t.value !== before) {
+    addLog(room, { kind: 'system', text: `${t.icon || '📊'} ${t.name}: ${before} → ${t.value}${t.max < 9999 ? `/${t.max}` : ''}` });
+  }
+}
+
+function setEnding(room, type, text) {
+  room.ending = { type, text: text || ENDING_TEXT[type], ts: Date.now() };
+  addLog(room, { kind: 'ending', type, text: room.ending.text });
+}
+
+// Automatic win/lose checks after anything that changes the game state.
+function checkEnding(room) {
+  if (room.ending) return;
+  for (const t of room.trackers) {
+    if (t.loseAt !== undefined && t.value === t.loseAt) {
+      return setEnding(room, 'lose', `${t.icon || ''} ${t.name} ถึง ${t.value} — การผจญภัยจบลงแล้ว`);
+    }
+  }
+  const crew = Object.values(room.players).filter((p) => p.char && p.id !== room.dmId);
+  if (crew.length && crew.every((p) => p.char.hp <= 0)) {
+    return setEnding(room, 'lose', 'ลูกเรือทุกคนหมดแรง... การผจญภัยจบลงแล้ว');
+  }
+  if (room.goals.win.length && room.goals.win.every((g) => g.done)) {
+    return setEnding(room, 'win', `ทำเป้าหมายสำเร็จทั้งหมด! ${room.world.emoji} ${room.world.name} จะจดจำชื่อของพวกคุณ`);
+  }
+}
+
+// Effects the AI may request in its JSON (all validated here).
+function applyAIEffects(room, out) {
+  for (const h of out.hpChanges || []) applyHp(room, [h]);
+  for (const t of out.trackerChanges || []) {
+    const tr = room.trackers.find((x) => x.id === t.id);
+    if (tr) setTracker(room, tr.id, tr.value + t.delta);
+  }
+  for (const id of out.goalsCompleted || []) {
+    const g = room.goals.win.find((x) => x.id === id);
+    if (g && !g.done) {
+      g.done = true;
+      addLog(room, { kind: 'system', text: `✅ เป้าหมายสำเร็จ: ${g.text}` });
+    }
+  }
+  checkEnding(room);
+}
+
 // ---------- Per-viewer state (hides DM-only info from players) ----------
 function viewFor(room, viewerId) {
   const isDM = viewerId === room.dmId;
@@ -132,6 +214,14 @@ function viewFor(room, viewerId) {
       .map((a) => (!isDM && a.hiddenDC && a.status === 'approved' ? { ...a, dc: null } : a)),
     questions: room.questions.filter((q) => isDM || q.public || q.playerId === viewerId),
     log: room.log.filter(visible),
+    world: isDM ? room.world : themes.publicWorld(room.world, room.visited),
+    goals: room.goals,
+    trackers: room.trackers,
+    location: room.location,
+    visited: room.visited,
+    ending: room.ending,
+    canGM: isDM || (room.dmMode === 'ai' && viewerId === room.hostId),
+    themeCards: themes.CARDS,
   };
 }
 
@@ -165,12 +255,12 @@ function judge(room, roll, dc) {
 
 // ---------- AI Dungeon Master ----------
 // Calls are queued per room so the story stays in order.
-function runAI(room, job) {
+function runAI(room, job, { anyMode = false } = {}) {
   room.aiBusy++;
   broadcast(room);
   room.aiQueue = room.aiQueue
     .then(async () => {
-      if (room.dmMode !== 'ai' || !rooms.has(room.code)) return;
+      if ((!anyMode && room.dmMode !== 'ai') || !rooms.has(room.code)) return;
       await job();
       room.aiError = '';
     })
@@ -230,7 +320,17 @@ function aiNarrate(room, action) {
     if (action.status !== 'rolled') return;
     action.status = 'resolved';
     addLog(room, { kind: 'narrate', text: r.narration, ref: action.playerName });
-    applyHp(room, r.hpChanges);
+    applyAIEffects(room, r);
+  });
+}
+
+function aiArrive(room, isl) {
+  const ev = room.world.seaEvents?.length && Math.random() < 0.5
+    ? room.world.seaEvents[crypto.randomInt(room.world.seaEvents.length)] : '';
+  return runAI(room, async () => {
+    const sc = await ai.newScene(room, `ลูกเรือเพิ่งเดินทางมาถึง ${isl.name}${ev ? ` (ระหว่างทางในทะเลเกิดเหตุการณ์: ${ev})` : ''} บรรยายการมาถึงและสิ่งแรกที่เห็น`);
+    room.scene = sc;
+    addLog(room, { kind: 'scene', title: sc.title, text: sc.text });
   });
 }
 
@@ -288,12 +388,15 @@ io.on('connection', (socket) => {
   const fail = (msg) => socket.emit('toast', { type: 'error', msg });
   const isDM = () => room && me && room.dmId === me.id;
   const isHost = () => room && me && (room.hostId === me.id || isDM());
+  // Game master powers: the human DM, or the room owner while the AI runs the game.
+  const isGM = () => isDM() || (room && me && room.dmMode === 'ai' && room.hostId === me.id);
   // level: false = anyone in the room, 'dm' = human DM, 'host' = room owner or DM
   const guard = (level, fn) => (payload = {}, ack) => {
     try {
       if (!room || !me) return fail('ยังไม่ได้เข้าห้อง');
       if (level === 'dm' && !isDM()) return fail('คำสั่งนี้สำหรับ DM เท่านั้น');
       if (level === 'host' && !isHost()) return fail('คำสั่งนี้สำหรับเจ้าของห้องหรือ DM');
+      if (level === 'gm' && !isGM()) return fail('คำสั่งนี้สำหรับ DM (หรือเจ้าของห้องเมื่อ AI เป็น DM)');
       fn(payload || {});
       broadcast(room);
       if (typeof ack === 'function') ack({ ok: true });
@@ -345,6 +448,8 @@ io.on('connection', (socket) => {
       questions: [],
       log: [],
     };
+    applyTheme(r, clip(payload.themeId, 20) || 'custom', { name: clip(payload.worldName, 60), lore: clip(payload.worldLore, LIMITS.scene) });
+    if (r.dmMode === 'ai' && !r.world.opening) r.scene = { title: 'บทนำ', text: 'AI DM จะเริ่มเรื่องเมื่อเจ้าของห้องกด "ให้ AI สร้างฉากใหม่"' };
     rooms.set(code, r);
     const p = { id: playerId, name, connected: true, socketId: null, char: null };
     if (wantAI) p.char = newCharacter(r, name);
@@ -431,6 +536,7 @@ io.on('connection', (socket) => {
     if (!target?.char) return;
     const delta = int(p.delta, -999, 999, 0);
     target.char.hp = Math.max(0, Math.min(target.char.maxHp, target.char.hp + delta));
+    setImmediate(() => { checkEnding(room); broadcast(room); });
     addLog(room, {
       kind: 'system',
       text: `${target.char.name || target.name} ${delta < 0 ? 'เสีย' : 'ฟื้น'} HP ${Math.abs(delta)} (เหลือ ${target.char.hp}/${target.char.maxHp})`,
@@ -455,6 +561,7 @@ io.on('connection', (socket) => {
     if (p.cls !== undefined) c.cls = clip(p.cls, LIMITS.name);
     if (p.notes !== undefined) c.notes = clip(p.notes, LIMITS.scene);
     if (p.inventory !== undefined) c.inventory = clip(p.inventory, LIMITS.scene);
+    if (p.power !== undefined) c.power = clip(p.power, 40);
     if (p.maxHp !== undefined) c.maxHp = int(p.maxHp, 1, 999, c.maxHp);
     if (p.hp !== undefined) c.hp = int(p.hp, 0, c.maxHp, c.hp);
     c.hp = Math.min(c.hp, c.maxHp);
@@ -605,8 +712,107 @@ io.on('connection', (socket) => {
     runAI(room, async () => {
       const r = await ai.continueStory(room, request);
       addLog(room, { kind: 'narrate', text: r.narration });
-      applyHp(room, r.hpChanges);
+      applyAIEffects(room, r);
     });
+  }));
+
+  // ----- World: theme, travel, goals, trackers, endings -----
+  socket.on('set_theme', guard('host', (p) => {
+    applyTheme(room, clip(p.themeId, 20), { name: clip(p.worldName, 60), lore: clip(p.worldLore, LIMITS.scene) });
+    addLog(room, { kind: 'system', text: `🌍 เปลี่ยนโลกเป็น ${room.world.emoji} ${room.world.name}` });
+    if (room.world.opening) addLog(room, { kind: 'scene', title: room.scene.title, text: room.scene.text });
+  }));
+
+  socket.on('world_info', guard('gm', (p) => {
+    if (p.name !== undefined) room.world.name = clip(p.name, 60) || room.world.name;
+    if (p.lore !== undefined) room.world.lore = clip(p.lore, LIMITS.scene);
+    room.settings.theme = room.world.name;
+  }));
+
+  socket.on('travel', guard(false, (p) => {
+    const isl = island(room, p.islandId);
+    if (!isl || isl.id === room.location) return;
+    if (room.dmMode === 'ai') {
+      if (room.aiBusy > 0) return fail('AI กำลังคิดอยู่ รอแป๊บนะ');
+      moveTo(room, isl.id);
+      aiArrive(room, isl);
+    } else {
+      if (!isDM()) return fail('ให้ DM เป็นคนพาเรือไปเกาะต่อไป');
+      moveTo(room, isl.id);
+    }
+  }));
+
+  socket.on('tracker', guard('gm', (p) => {
+    const t = room.trackers.find((x) => x.id === p.id);
+    if (!t) return;
+    setTracker(room, t.id, p.value !== undefined ? int(p.value, 0, t.max, t.value) : t.value + int(p.delta, -999, 999, 0));
+    checkEnding(room);
+  }));
+
+  socket.on('tracker_add', guard('gm', (p) => {
+    const name = clip(p.name, 40);
+    if (!name || room.trackers.length >= 8) return;
+    const max = int(p.max, 1, 9999, 10);
+    const t = { id: uid(), name, icon: clip(p.icon, 4) || '📊', value: int(p.value, 0, max, 0), max };
+    if (p.loseAt === 'zero') t.loseAt = 0;
+    if (p.loseAt === 'max') t.loseAt = max;
+    room.trackers.push(t);
+  }));
+
+  socket.on('tracker_remove', guard('gm', (p) => {
+    room.trackers = room.trackers.filter((x) => x.id !== p.id);
+  }));
+
+  socket.on('goal_toggle', guard('gm', (p) => {
+    const g = room.goals.win.find((x) => x.id === p.id);
+    if (!g) return;
+    g.done = !g.done;
+    if (g.done) addLog(room, { kind: 'system', text: `✅ เป้าหมายสำเร็จ: ${g.text}` });
+    checkEnding(room);
+  }));
+
+  socket.on('goal_add', guard('gm', (p) => {
+    const list = p.list === 'lose' ? 'lose' : 'win';
+    const text = clip(p.text, 200);
+    if (text && room.goals[list].length < 10) room.goals[list].push(themes.newGoal(text));
+  }));
+
+  socket.on('goal_remove', guard('gm', (p) => {
+    for (const k of ['win', 'lose']) room.goals[k] = room.goals[k].filter((g) => g.id !== p.id);
+  }));
+
+  socket.on('ai_goals', guard('gm', (p) => {
+    if (!ai.available()) return fail('AI ยังไม่พร้อม');
+    runAI(room, async () => {
+      const g = await ai.writeGoals(room, clip(p.idea, LIMITS.text));
+      room.goals = { win: g.win.map(themes.newGoal), lose: g.lose.map(themes.newGoal) };
+      addLog(room, { kind: 'system', text: '🤖 AI เขียนเป้าหมายแพ้/ชนะใหม่แล้ว — ดูในแท็บโลก' });
+    }, { anyMode: true });
+  }));
+
+  socket.on('random_event', guard('gm', () => {
+    const isl = island(room, room.location);
+    const pool = [...(isl?.events || []), ...(room.world.seaEvents || [])];
+    if (!pool.length) return fail('โลกนี้ยังไม่มีตารางอีเวนต์');
+    const ev = pool[crypto.randomInt(pool.length)];
+    if (room.dmMode === 'ai') {
+      runAI(room, async () => {
+        const r = await ai.continueStory(room, `ให้เกิดเหตุการณ์นี้: ${ev}`);
+        addLog(room, { kind: 'narrate', text: r.narration });
+        applyAIEffects(room, r);
+      });
+    } else {
+      addLog(room, { kind: 'event', text: ev });
+    }
+  }));
+
+  socket.on('ending', guard('gm', (p) => {
+    if (p.type === 'clear') {
+      room.ending = null;
+      addLog(room, { kind: 'system', text: '▶️ เล่นต่อ' });
+    } else if (p.type === 'win' || p.type === 'lose') {
+      setEnding(room, p.type, clip(p.text, LIMITS.text));
+    }
   }));
 
   socket.on('ai_retry', guard(false, () => {
