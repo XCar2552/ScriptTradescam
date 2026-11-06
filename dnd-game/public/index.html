@@ -103,8 +103,10 @@
 
       <!-- ACTIONS -->
       <div class="pane" data-pane="act">
+        <div id="boardView"></div>
         <div id="declareBox" class="card">
           <h2>⚔️ คุณจะทำอะไร?</h2>
+          <div id="targetChip" class="target-chip hidden"></div>
           <textarea id="actionInput" rows="3" maxlength="600" placeholder="พิมพ์ได้อิสระ เช่น ‘ปีนกำแพงไปแอบดูในหน้าต่าง’"></textarea>
           <div class="row">
             <select id="actionStat"></select>
@@ -288,6 +290,7 @@
   <script src="/socket.io/socket.io.js"></script>
   <script src="art.js"></script>
   <script src="avatar.js"></script>
+  <script src="sprites.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

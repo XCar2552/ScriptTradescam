@@ -334,3 +334,52 @@ body.is-dm .player-only { display: none !important; }
 .map3d-host, .map3d { width: 100%; height: 62vw; max-height: 420px; min-height: 240px; border-radius: 12px; overflow: hidden; position: relative; background: #1f5d96; }
 .map3d canvas { width: 100% !important; height: 100% !important; display: block; touch-action: none; }
 .map-loading { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font-size: .9rem; }
+
+/* ---------- Battle board ---------- */
+.board-card { padding: 12px 10px; }
+.board-wrap { perspective: 900px; margin: 8px 0; padding: 4px; }
+.board { display: grid; gap: 0; border-radius: 10px; overflow: visible; border: 3px solid #0006; transform-origin: 50% 100%; transition: transform .35s; }
+.board-wrap.tilt { padding: 0 2px; margin-top: -34%; pointer-events: none; }
+.board-wrap.tilt .board { pointer-events: auto; }
+.board-card .map-head, .board-card .turn-bar, .board-card .turn-now { position: relative; z-index: 2; }
+.board-wrap.tilt .board { transform: rotateX(42deg) scale(.96); transform-style: preserve-3d; }
+.board-wrap.tilt .cell { transform-style: preserve-3d; }
+.cell { aspect-ratio: 1; position: relative; display: grid; place-items: center; background: var(--c1); }
+.cell.alt { background: var(--c2); }
+.cell.reach::after { content: ""; position: absolute; inset: 3px; border-radius: 6px; background: #ffffff2e; border: 1px dashed #fff9; }
+.cell.place::after { content: "+"; position: absolute; inset: 0; display: grid; place-items: center; color: #fff9; font-weight: 700; }
+.tok { position: relative; display: flex; flex-direction: column; align-items: center; transform-origin: 50% 90%; transition: transform .25s; z-index: 1; }
+.board-wrap.tilt .tok { transform: rotateX(-60deg) translateY(-30%) scale(1.15); }
+.tok .avatar, .tok .sprite { border-radius: 8px; filter: drop-shadow(0 3px 2px #0008); }
+.tok.player .avatar { border: 2px solid #fff; border-radius: 50%; }
+.tok.enemy .avatar { border: 2px solid var(--bad); border-radius: 50%; }
+.tok.sel .avatar, .tok.sel .sprite { outline: 3px solid var(--gold); outline-offset: 1px; }
+.tok.turn::before { content: ""; position: absolute; bottom: -6px; width: 34px; height: 10px; border-radius: 50%; background: radial-gradient(#ffd34d, transparent 70%); animation: pulse 1s infinite alternate; }
+.tok.down { filter: grayscale(1) opacity(.55); }
+.tok-hp { width: 30px; height: 4px; border-radius: 3px; background: #0009; margin-top: 1px; overflow: hidden; }
+.tok-hp div { height: 100%; background: var(--good); }
+.tok.enemy .tok-hp div { background: var(--bad); }
+.sprite { display: inline-block; flex-shrink: 0; vertical-align: middle; }
+.sprite svg { width: 100%; height: 100%; display: block; }
+.turn-bar { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
+.turn-chip { display: flex; align-items: center; gap: 4px; padding: 3px 8px 3px 3px; border-radius: 999px; background: var(--bg2); border: 1px solid var(--line); white-space: nowrap; }
+.turn-chip.on { border-color: var(--gold); background: #e8b04a26; }
+.turn-chip small { font-size: .72rem; }
+.turn-now { font-size: .85rem; margin: 6px 0; padding: 6px 10px; border-radius: 8px; background: var(--bg2); }
+.sel-panel { display: flex; gap: 10px; align-items: center; padding: 8px; border-radius: 10px; background: var(--bg2); margin: 6px 0; }
+.placing { font-size: .85rem; padding: 6px 8px; border-radius: 8px; background: #7c5cff26; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+.center { text-align: center; }
+.gm-tools { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
+.palette { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-bottom: 8px; }
+.pal { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 5px 2px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg2); color: var(--text); font: inherit; }
+.pal.on { border-color: var(--gold); background: #e8b04a26; }
+.pal small { font-size: .6rem; line-height: 1.1; text-align: center; }
+.target-chip { display: flex; align-items: center; gap: 6px; font-size: .85rem; padding: 6px 8px; border-radius: 8px; background: #ff5c7a1f; border: 1px solid #ff5c7a66; margin-bottom: 8px; }
+.target-chip .x { margin-left: auto; background: none; border: 0; color: var(--muted); }
+/* terrain colours */
+.t-grass { --c1: #4f8f3a; --c2: #5a9e43; } .t-beach { --c1: #e2c98e; --c2: #ead6a2; }
+.t-deck { --c1: #8d6e63; --c2: #7d5f55; } .t-jungle { --c1: #2e6b2e; --c2: #377a37; }
+.t-desert { --c1: #e3bd63; --c2: #ecca78; } .t-stone { --c1: #5f6266; --c2: #6c7075; }
+.t-metal { --c1: #4f6570; --c2: #5b737f; } .t-reef { --c1: #1f6f8b; --c2: #27819f; }
+.t-mist { --c1: #3b4250; --c2: #464e5e; } .t-sky { --c1: #2b1b5e; --c2: #3a2a7a; }
+.t-deck .cell { background-image: linear-gradient(90deg, transparent 96%, #0003 96%); }

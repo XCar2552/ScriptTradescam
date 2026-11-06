@@ -8,6 +8,7 @@ const { Server } = require('socket.io');
 const ai = require('./ai');
 const themes = require('./themes');
 const { DIFFICULTY, level } = require('./difficulty');
+const CATALOG = require('./boardCatalog');
 
 const app = express();
 app.use(express.static(path.join(__dirname, 'public')));
@@ -196,6 +197,7 @@ function applyAIEffects(room, out) {
     const delta = h.delta < 0 ? Math.min(-1, Math.round(h.delta * mul)) : h.delta;
     applyHp(room, [{ ...h, delta }]);
   }
+  for (const e of out.enemyChanges || []) enemyDamage(room, e.name, e.delta);
   for (const t of out.trackerChanges || []) {
     const tr = room.trackers.find((x) => x.id === t.id);
     if (tr) setTracker(room, tr.id, tr.value + t.delta);
@@ -208,6 +210,160 @@ function applyAIEffects(room, out) {
     }
   }
   checkEnding(room);
+}
+
+// ---------- Battle board ----------
+const MOVE_RANGE = 6;
+const dist = (a, b) => Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
+const tokenAt = (b, x, y) => b.tokens.find((t) => t.x === x && t.y === y);
+const inBounds = (b, x, y) => x >= 0 && y >= 0 && x < b.cols && y < b.rows;
+const crew = (room) => Object.values(room.players).filter((p) => p.char && p.id !== room.dmId);
+
+function freeCell(b, yFrom, yTo) {
+  const cells = [];
+  for (let y = yFrom; y <= yTo; y++) for (let x = 0; x < b.cols; x++) if (!tokenAt(b, x, y)) cells.push({ x, y });
+  return cells.length ? cells[crypto.randomInt(cells.length)] : null;
+}
+
+function uniqueName(b, name) {
+  if (!b.tokens.some((t) => t.name === name)) return name;
+  let n = 2;
+  while (b.tokens.some((t) => t.name === `${name} ${n}`)) n++;
+  return `${name} ${n}`;
+}
+
+// Keep one token per crew member; drop tokens of people who left or became DM.
+function syncPlayerTokens(room) {
+  const b = room.board;
+  if (!b) return;
+  const ids = new Set(crew(room).map((p) => p.id));
+  b.tokens = b.tokens.filter((t) => t.kind !== 'player' || ids.has(t.ref));
+  for (const p of crew(room)) {
+    if (b.tokens.some((t) => t.kind === 'player' && t.ref === p.id)) continue;
+    const c = freeCell(b, b.rows - 2, b.rows - 1) || freeCell(b, 0, b.rows - 1);
+    if (c) b.tokens.push({ id: uid(), kind: 'player', ref: p.id, name: p.char.name || p.name, ...c });
+  }
+  for (const t of b.tokens) if (t.kind === 'player') { const p = room.players[t.ref]; if (p) t.name = p.char.name || p.name; }
+}
+
+function addEnemy(room, type, x, y, name) {
+  const b = room.board;
+  const e = CATALOG.ENEMIES[type];
+  if (!b || !e) return null;
+  const c = x !== undefined && inBounds(b, x, y) && !tokenAt(b, x, y) ? { x, y } : freeCell(b, 0, Math.floor(b.rows / 2) - 1);
+  if (!c) return null;
+  const t = { id: uid(), kind: 'enemy', sprite: type, name: uniqueName(b, clip(name, 30) || e.name), hp: e.hp, maxHp: e.hp, ...c };
+  b.tokens.push(t);
+  return t;
+}
+
+function addObject(room, type, x, y) {
+  const b = room.board;
+  if (!b || !CATALOG.OBJECTS[type]) return null;
+  const c = x !== undefined && inBounds(b, x, y) && !tokenAt(b, x, y) ? { x, y } : freeCell(b, 2, b.rows - 3);
+  if (!c) return null;
+  const t = { id: uid(), kind: 'object', sprite: type, name: CATALOG.OBJECTS[type], ...c };
+  b.tokens.push(t);
+  return t;
+}
+
+function startBoard(room, terrain) {
+  const plan = CATALOG.ISLAND_BOARD[room.location];
+  room.board = {
+    terrain: CATALOG.TERRAINS[terrain] ? terrain : plan?.terrain || 'grass',
+    cols: 8, rows: 10, tokens: [], order: [], turn: 0, round: 0,
+  };
+  syncPlayerTokens(room);
+  addLog(room, { kind: 'system', text: `♟️ เริ่มฉากต่อสู้! (${CATALOG.TERRAINS[room.board.terrain]})` });
+}
+
+function autoEncounter(room, foes, props) {
+  for (const o of props) addObject(room, o);
+  for (const f of foes) addEnemy(room, f);
+}
+
+function enemyDamage(room, name, delta) {
+  const b = room.board;
+  if (!b) return;
+  const n = String(name).trim().toLowerCase();
+  const t = b.tokens.find((x) => x.kind === 'enemy' && x.name.toLowerCase() === n)
+    || b.tokens.find((x) => x.kind === 'enemy' && (x.name.toLowerCase().startsWith(n) || n.startsWith(x.name.toLowerCase())));
+  if (t) setEnemyHp(room, t, t.hp + delta);
+}
+
+function setEnemyHp(room, t, hp) {
+  const b = room.board;
+  t.hp = Math.max(0, Math.min(t.maxHp, hp));
+  if (t.hp > 0) return;
+  b.tokens = b.tokens.filter((x) => x !== t);
+  b.order = b.order.filter((id) => id !== t.id);
+  if (b.turn >= b.order.length) b.turn = 0;
+  addLog(room, { kind: 'system', text: `💀 ${t.name} ถูกกำจัดแล้ว!` });
+  if (!b.tokens.some((x) => x.kind === 'enemy')) addLog(room, { kind: 'system', text: '🎉 ศัตรูถูกกำจัดหมดแล้ว — ชนะการต่อสู้!' });
+}
+
+function initMod(room, p) {
+  const stat = room.settings.stats.find((k) => ['ความไว', 'DEX'].includes(k));
+  return stat ? statMod(room, p, stat) : 0;
+}
+
+function rollInitiative(room) {
+  const b = room.board;
+  const rolls = b.tokens
+    .filter((t) => t.kind === 'player' || t.kind === 'enemy')
+    .map((t) => {
+      const mod = t.kind === 'player' ? initMod(room, room.players[t.ref]) : 0;
+      const r = d(20);
+      return { t, total: r + mod, r };
+    })
+    .sort((a, c) => c.total - a.total || crypto.randomInt(3) - 1);
+  b.order = rolls.map((x) => x.t.id);
+  b.turn = 0;
+  b.round = 1;
+  addLog(room, { kind: 'system', text: `🎲 ลำดับการเล่น: ${rolls.map((x) => `${x.t.name} (${x.total})`).join(' → ')}` });
+}
+
+const currentToken = (b) => (b && b.order.length ? b.tokens.find((t) => t.id === b.order[b.turn]) : null);
+
+function nextTurn(room) {
+  const b = room.board;
+  if (!b?.order.length) return;
+  for (let i = 0; i < b.order.length; i++) {
+    b.turn++;
+    if (b.turn >= b.order.length) { b.turn = 0; b.round++; }
+    const t = currentToken(b);
+    const alive = t && (t.kind === 'enemy' ? t.hp > 0 : (room.players[t.ref]?.char?.hp ?? 0) > 0);
+    if (alive) break;
+  }
+  const t = currentToken(b);
+  if (!t) return;
+  addLog(room, { kind: 'system', text: `▶️ รอบ ${b.round}: ตาของ ${t.name}` });
+  if (t.kind === 'enemy' && room.dmMode === 'ai') aiEnemyTurn(room, t);
+}
+
+// AI mode: the enemy walks toward the nearest conscious crew member, then the AI narrates its move.
+function aiEnemyTurn(room, t) {
+  const b = room.board;
+  const targets = b.tokens.filter((x) => x.kind === 'player' && (room.players[x.ref]?.char?.hp ?? 0) > 0);
+  if (!targets.length) return;
+  const target = targets.sort((a, c) => dist(a, t) - dist(c, t))[0];
+  for (let step = 0; step < 4 && dist(t, target) > 1; step++) {
+    const nx = t.x + Math.sign(target.x - t.x);
+    const ny = t.y + Math.sign(target.y - t.y);
+    const options = [{ x: nx, y: ny }, { x: nx, y: t.y }, { x: t.x, y: ny }].filter((c) => inBounds(b, c.x, c.y) && !tokenAt(b, c.x, c.y));
+    if (!options.length) break;
+    Object.assign(t, options[0]);
+  }
+  const near = dist(t, target) <= 1;
+  runAI(room, async () => {
+    if (!b.tokens.includes(t)) return;
+    const r = await ai.continueStory(room,
+      `ถึงตาของศัตรู "${t.name}" (HP ${t.hp}/${t.maxHp}) ${near ? `ซึ่งอยู่ติดกับ ${target.name} แล้ว` : `ซึ่งกำลังเดินเข้าหา ${target.name}`} ` +
+      'เล่าสิ่งที่มันทำสั้นๆ ถ้ามันโจมตีโดนให้ใส่ดาเมจใน hp_changes (โจมตีอาจพลาดได้)');
+    addLog(room, { kind: 'narrate', text: r.narration });
+    applyAIEffects(room, r);
+    if (room.board === b && currentToken(b) === t) nextTurn(room);
+  });
 }
 
 // ---------- Per-viewer state (hides DM-only info from players) ----------
@@ -255,10 +411,14 @@ function viewFor(room, viewerId) {
     aiStyles: AI_STYLES,
     difficulties: Object.fromEntries(Object.entries(DIFFICULTY).map(([k, v]) => [k, { label: v.label, dc: v.dc, defaultDC: v.defaultDC }])),
     themeCards: themes.CARDS,
+    board: room.board,
+    catalog: { enemies: Object.fromEntries(Object.entries(CATALOG.ENEMIES).map(([k, v]) => [k, v.name])), objects: CATALOG.OBJECTS, terrains: CATALOG.TERRAINS },
+    moveRange: MOVE_RANGE,
   };
 }
 
 function broadcast(room) {
+  syncPlayerTokens(room);
   for (const p of Object.values(room.players)) {
     if (p.socketId) io.to(p.socketId).emit('state', viewFor(room, p.id));
   }
@@ -478,6 +638,7 @@ io.on('connection', (socket) => {
       aiDM: { name: 'AI DM', style: AI_STYLES[0], persona: '' },
       avatars: {},
       avatarRev: {},
+      board: null,
       createdAt: Date.now(),
       settings: defaultSettings(payload.preset),
       scene: { title: 'บทนำ', text: wantAI ? 'AI DM จะเริ่มเรื่องเมื่อเจ้าของห้องกด "เริ่มเรื่อง"' : 'DM กำลังเตรียมฉากแรก...' },
@@ -629,7 +790,10 @@ io.on('connection', (socket) => {
     const pendingMine = room.actions.filter((a) => a.playerId === me.id && ['pending', 'approved'].includes(a.status));
     if (pendingMine.length >= 3) return fail('มีการกระทำค้างอยู่ 3 อย่างแล้ว รอ DM ก่อน');
     const stat = room.settings.stats.includes(p.stat) ? p.stat : '';
+    const target = room.board?.tokens.find((t) => t.id === p.targetId && t.kind === 'enemy');
     const action = {
+      targetId: target?.id,
+      targetName: target?.name,
       id: uid(),
       playerId: me.id,
       playerName: me.char?.name || me.name,
@@ -788,6 +952,98 @@ io.on('connection', (socket) => {
     if (p.name !== undefined) a.name = clip(p.name, 30) || 'AI DM';
     if (p.style !== undefined) a.style = AI_STYLES.includes(p.style) ? p.style : a.style;
     if (p.persona !== undefined) a.persona = clip(p.persona, 300);
+  }));
+
+  // ----- Battle board -----
+  const boardOr = () => { if (!room.board) { fail('ยังไม่ได้เริ่มฉากต่อสู้'); return null; } return room.board; };
+
+  socket.on('board_start', guard('gm', (p) => startBoard(room, p.terrain)));
+
+  socket.on('board_end', guard('gm', () => {
+    room.board = null;
+    addLog(room, { kind: 'system', text: '🏁 จบฉากต่อสู้' });
+  }));
+
+  socket.on('board_terrain', guard('gm', (p) => {
+    const b = boardOr();
+    if (b && CATALOG.TERRAINS[p.terrain]) b.terrain = p.terrain;
+  }));
+
+  socket.on('board_add', guard('gm', (p) => {
+    if (!boardOr()) return;
+    const x = int(p.x, 0, 99, undefined);
+    const y = int(p.y, 0, 99, undefined);
+    const t = p.kind === 'object' ? addObject(room, p.type, x, y) : addEnemy(room, p.type, x, y, p.name);
+    if (!t) fail('วางตรงนี้ไม่ได้');
+  }));
+
+  socket.on('board_auto', guard('gm', () => {
+    if (!boardOr()) return;
+    const plan = CATALOG.ISLAND_BOARD[room.location];
+    const keys = Object.keys(CATALOG.ENEMIES);
+    autoEncounter(room, plan?.foes || [keys[crypto.randomInt(keys.length)], keys[crypto.randomInt(keys.length)]], plan?.props || ['rock', 'tree']);
+    addLog(room, { kind: 'system', text: '⚔️ ศัตรูปรากฏตัว!' });
+  }));
+
+  socket.on('board_remove', guard('gm', (p) => {
+    const b = boardOr();
+    if (!b) return;
+    const t = b.tokens.find((x) => x.id === p.tokenId);
+    if (!t || t.kind === 'player') return;
+    b.tokens = b.tokens.filter((x) => x !== t);
+    b.order = b.order.filter((id) => id !== t.id);
+    if (b.turn >= b.order.length) b.turn = 0;
+  }));
+
+  socket.on('board_hp', guard('gm', (p) => {
+    const b = boardOr();
+    const t = b?.tokens.find((x) => x.id === p.tokenId && x.kind === 'enemy');
+    if (t) setEnemyHp(room, t, t.hp + int(p.delta, -999, 999, 0));
+  }));
+
+  socket.on('board_move', guard(false, (p) => {
+    const b = boardOr();
+    if (!b) return;
+    const t = b.tokens.find((x) => x.id === p.tokenId);
+    const x = int(p.x, -1, 99, -1);
+    const y = int(p.y, -1, 99, -1);
+    if (!t || !inBounds(b, x, y) || tokenAt(b, x, y)) return fail('ไปช่องนั้นไม่ได้');
+    if (!isGM()) {
+      if (t.kind !== 'player' || t.ref !== me.id) return fail('เดินได้แค่หมากของตัวเอง');
+      const cur = currentToken(b);
+      if (cur && cur.id !== t.id) return fail(`ยังไม่ถึงตาคุณ (ตอนนี้ตาของ ${cur.name})`);
+      if (dist(t, { x, y }) > MOVE_RANGE) return fail(`เดินได้ไกลสุด ${MOVE_RANGE} ช่อง`);
+      if ((me.char?.hp ?? 0) <= 0) return fail('ตัวละครหมดสติอยู่');
+    }
+    t.x = x;
+    t.y = y;
+  }));
+
+  socket.on('board_initiative', guard('gm', () => {
+    if (!boardOr()) return;
+    rollInitiative(room);
+    const first = currentToken(room.board);
+    if (first?.kind === 'enemy' && room.dmMode === 'ai') aiEnemyTurn(room, first); // enemy goes first
+  }));
+
+  socket.on('board_next', guard(false, () => {
+    const b = boardOr();
+    if (!b?.order.length) return;
+    const cur = currentToken(b);
+    if (!isGM() && !(cur?.kind === 'player' && cur.ref === me.id)) return fail('จบเทิร์นได้เฉพาะเจ้าของตาหรือ DM');
+    nextTurn(room);
+  }));
+
+  socket.on('ai_encounter', guard('gm', (p) => {
+    if (!ai.available()) return fail('AI ยังไม่พร้อม');
+    if (!room.board) startBoard(room);
+    runAI(room, async () => {
+      const plan = await ai.planEncounter(room, clip(p.idea, LIMITS.text), CATALOG);
+      if (plan.terrain) room.board.terrain = plan.terrain;
+      for (const o of plan.objects) addObject(room, o);
+      for (const e of plan.enemies) addEnemy(room, e.type, undefined, undefined, e.name);
+      if (plan.intro) addLog(room, { kind: 'narrate', text: plan.intro });
+    }, { anyMode: true });
   }));
 
   // ----- World: theme, travel, goals, trackers, endings -----

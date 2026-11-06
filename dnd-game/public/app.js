@@ -222,6 +222,7 @@
     renderAsk();
     renderAI();
     renderProfiles();
+    renderBoard();
     renderWorld();
     renderEnding();
     fillSettings(false);
@@ -431,8 +432,9 @@
   $('#actionSend').onclick = () => {
     const text = $('#actionInput').value.trim();
     if (!text) return toast('พิมพ์สิ่งที่อยากทำก่อน', 'error');
-    socket.emit('submit_action', { text, stat: $('#actionStat').value });
+    socket.emit('submit_action', { text, stat: $('#actionStat').value, targetId: attackTarget || undefined });
     $('#actionInput').value = '';
+    setTarget(null);
     toast('ส่งให้ DM แล้ว');
   };
 
@@ -897,6 +899,157 @@
     }
   });
 
+
+
+  // ---------- BATTLE BOARD ----------
+  let selTok = null;
+  let placing = null; // { kind: 'enemy'|'object', type }
+  let boardTilt = store.get('d20.tilt') !== 'flat';
+  let attackTarget = null;
+  const bd = {}; // drafts
+  function setTarget(id) {
+    attackTarget = id;
+    const t = S?.board?.tokens.find((x) => x.id === id);
+    const chip = $('#targetChip');
+    chip.classList.toggle('hidden', !t);
+    if (t) chip.innerHTML = `🎯 เป้าหมาย: ${D20Sprites.html(t.sprite, 20)} <b>${esc(t.name)}</b> <button class="x" id="targetClear">✕</button>`;
+  }
+  $('#targetChip').addEventListener('click', (e) => { if (e.target.id === 'targetClear') setTarget(null); });
+
+  const tokHp = (t) => (t.kind === 'player' ? S.players.find((p) => p.id === t.ref)?.char : t.kind === 'enemy' ? t : null);
+  function tokArt(t, size) {
+    if (t.kind === 'player') return av(t.ref, size);
+    return D20Sprites.html(t.sprite, size);
+  }
+
+  function renderBoard() {
+    const box = $('#boardView');
+    const b = S.board;
+    const gm = S.canGM;
+    if (!b) {
+      placing = null; selTok = null;
+      box.innerHTML = gm ? `<div class="card"><h2>♟️ ฉากต่อสู้</h2>
+        <p class="muted small">เปิดกระดานให้ทุกคนเห็นพร้อมกัน วางศัตรู/สิ่งของ แล้วเล่นทีละเทิร์น</p>
+        <div class="row"><select id="bdTerrain"><option value="">พื้นที่: ตามเกาะปัจจุบัน</option>${Object.entries(S.catalog.terrains).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join('')}</select>
+        <button class="btn gold" data-bd="start">♟️ เริ่มฉากต่อสู้</button></div>
+        ${S.aiAvailable ? `<div class="row"><input id="bdIdea" maxlength="300" placeholder="ไอเดียศัตรู (ไม่ใส่ก็ได้)"><button class="btn primary" data-bd="aiEnc" ${S.aiBusy ? 'disabled' : ''}>🤖 ให้ AI จัดฉาก</button></div>` : ''}
+      </div>` : '';
+      return;
+    }
+    if (selTok && !b.tokens.some((t) => t.id === selTok)) selTok = null;
+    if (attackTarget && !b.tokens.some((t) => t.id === attackTarget)) setTarget(null);
+    const cur = b.order.length ? b.tokens.find((t) => t.id === b.order[b.turn]) : null;
+    const myTok = b.tokens.find((t) => t.kind === 'player' && t.ref === S.you);
+    const sel = b.tokens.find((t) => t.id === selTok);
+    const canMoveSel = sel && (gm || (sel.kind === 'player' && sel.ref === S.you && (!cur || cur.id === sel.id)));
+    const reach = (x, y) => canMoveSel && (gm || Math.max(Math.abs(sel.x - x), Math.abs(sel.y - y)) <= S.moveRange);
+
+    let cells = '';
+    for (let y = 0; y < b.rows; y++) {
+      for (let x = 0; x < b.cols; x++) {
+        const t = b.tokens.find((k) => k.x === x && k.y === y);
+        const cls = ['cell', (x + y) % 2 ? 'alt' : ''];
+        if (!t && reach(x, y)) cls.push('reach');
+        if (!t && placing) cls.push('place');
+        let inner = '';
+        if (t) {
+          const h = tokHp(t);
+          const down = h && h.hp <= 0;
+          cls.push('has');
+          inner = `<div class="tok ${t.kind} ${t.id === selTok ? 'sel' : ''} ${cur?.id === t.id ? 'turn' : ''} ${down ? 'down' : ''}">
+            ${tokArt(t, 34)}
+            ${h ? `<div class="tok-hp"><div style="width:${Math.max(0, Math.round((h.hp / h.maxHp) * 100))}%"></div></div>` : ''}
+          </div>`;
+        }
+        cells += `<div class="${cls.join(' ')}" data-cx="${x}" data-cy="${y}">${inner}</div>`;
+      }
+    }
+
+    const order = b.order.map((id) => b.tokens.find((t) => t.id === id)).filter(Boolean);
+    const myTurn = cur && cur.kind === 'player' && cur.ref === S.you;
+    const h = sel && tokHp(sel);
+    const enemies = Object.entries(S.catalog.enemies);
+    const objects = Object.entries(S.catalog.objects);
+    const html = `<div class="card board-card">
+      <div class="map-head"><h2>♟️ ${esc(S.catalog.terrains[b.terrain] || '')}${b.round ? ` · รอบ ${b.round}` : ''}</h2>
+        <div class="seg mini"><button data-bd="tilt" class="${boardTilt ? 'on' : ''}">3D</button><button data-bd="flat" class="${boardTilt ? '' : 'on'}">บน</button></div></div>
+      ${order.length ? `<div class="turn-bar">${order.map((t) => `<span class="turn-chip ${cur?.id === t.id ? 'on' : ''}">${tokArt(t, 22)}<small>${esc(t.name)}</small></span>`).join('')}</div>` : ''}
+      ${cur ? `<div class="turn-now">${myTurn ? '⭐ ตาของคุณ! เดินหมาก หรือส่งการกระทำด้านล่าง แล้วกดจบเทิร์น' : `ตอนนี้ตาของ <b>${esc(cur.name)}</b>${cur.kind === 'enemy' && S.dmMode === 'ai' ? ' (AI กำลังเล่น...)' : ''}`}</div>` : ''}
+      <div class="board-wrap ${boardTilt ? 'tilt' : ''}"><div class="board t-${b.terrain}" style="grid-template-columns:repeat(${b.cols},1fr)">${cells}</div></div>
+      ${placing ? `<div class="placing">วางอยู่: ${D20Sprites.html(placing.type, 22)} ${esc(placing.kind === 'enemy' ? S.catalog.enemies[placing.type] : S.catalog.objects[placing.type])} — แตะช่องว่างบนกระดาน <button class="btn small" data-bd="unplace">เสร็จ</button></div>` : ''}
+      ${sel ? `<div class="sel-panel">${tokArt(sel, 44)}<div class="grow"><b>${esc(sel.name)}</b>
+          <div class="muted small">${sel.kind === 'player' ? 'ลูกเรือ' : sel.kind === 'enemy' ? 'ศัตรู' : 'สิ่งของ/สิ่งกีดขวาง'}${h ? ` · ❤️ ${h.hp}/${h.maxHp}` : ''}${canMoveSel ? ' · แตะช่องที่ไฮไลต์เพื่อเดิน' : ''}</div>
+          <div class="btn-row" style="margin-top:6px">
+            ${sel.kind === 'enemy' && myTok && !S.isDM ? `<button class="btn bad small" data-bd="attack">⚔️ โจมตี</button>` : ''}
+            ${gm && sel.kind === 'enemy' ? `<button class="btn small" data-bd="hp" data-d="-5">−5</button><button class="btn small" data-bd="hp" data-d="-1">−1</button><button class="btn small" data-bd="hp" data-d="1">+1</button>` : ''}
+            ${gm && sel.kind !== 'player' ? `<button class="btn small" data-bd="remove">🗑️</button>` : ''}
+          </div></div></div>` : '<p class="muted small center">แตะหมากเพื่อเลือก · ผู้เล่นเดินได้ไกลสุด ' + S.moveRange + ' ช่อง</p>'}
+      <div class="btn-row">
+        ${gm ? `<button class="btn small" data-bd="init">🎲 ทอยลำดับ</button>` : ''}
+        ${cur && (gm || myTurn) ? `<button class="btn gold small" data-bd="next">${myTurn ? '✅ จบเทิร์น' : '⏭ ตาต่อไป'}</button>` : ''}
+      </div>
+      ${gm ? `<details class="gm-tools" ${bd.open ? 'open' : ''} data-bdopen="1"><summary><b>🛠️ เครื่องมือ DM</b></summary>
+        <div class="av-label">ศัตรู — แตะเพื่อเลือก แล้วแตะช่องบนกระดาน</div>
+        <div class="palette">${enemies.map(([k, n]) => `<button class="pal ${placing?.type === k ? 'on' : ''}" data-place="enemy" data-type="${k}">${D20Sprites.html(k, 30)}<small>${esc(n)}</small></button>`).join('')}</div>
+        <div class="av-label">สิ่งของ / landmark</div>
+        <div class="palette">${objects.map(([k, n]) => `<button class="pal ${placing?.type === k ? 'on' : ''}" data-place="object" data-type="${k}">${D20Sprites.html(k, 30)}<small>${esc(n)}</small></button>`).join('')}</div>
+        <div class="row"><select id="bdTerrain2">${Object.entries(S.catalog.terrains).map(([k, v]) => `<option value="${k}" ${k === b.terrain ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></div>
+        <div class="btn-row"><button class="btn small" data-bd="auto">⚔️ จัดศัตรูตามเกาะ</button>
+          ${S.aiAvailable ? `<button class="btn primary small" data-bd="aiEnc" ${S.aiBusy ? 'disabled' : ''}>🤖 ให้ AI เพิ่มศัตรู</button>` : ''}
+          <button class="btn bad small" data-bd="end">🏁 จบการต่อสู้</button></div>
+      </details>` : ''}
+    </div>`;
+    patch(box, html);
+  }
+
+  $('#boardView').addEventListener('toggle', (e) => { if (e.target.dataset?.bdopen) bd.open = e.target.open; }, true);
+  $('#boardView').addEventListener('change', (e) => {
+    if (e.target.id === 'bdTerrain2') socket.emit('board_terrain', { terrain: e.target.value });
+  });
+  $('#boardView').addEventListener('click', (e) => {
+    const cell = e.target.closest('[data-cx]');
+    const b = S.board;
+    if (cell && b) {
+      const x = Number(cell.dataset.cx), y = Number(cell.dataset.cy);
+      const t = b.tokens.find((k) => k.x === x && k.y === y);
+      if (t) { selTok = t.id === selTok ? null : t.id; renderBoard(); return; }
+      if (placing) { socket.emit('board_add', { kind: placing.kind, type: placing.type, x, y }); return; }
+      if (selTok) socket.emit('board_move', { tokenId: selTok, x, y });
+      return;
+    }
+    const pal = e.target.closest('[data-place]');
+    if (pal) {
+      placing = placing?.type === pal.dataset.type ? null : { kind: pal.dataset.place, type: pal.dataset.type };
+      selTok = null;
+      renderBoard();
+      return;
+    }
+    const btn = e.target.closest('[data-bd]');
+    if (!btn) return;
+    switch (btn.dataset.bd) {
+      case 'start': socket.emit('board_start', { terrain: $('#bdTerrain')?.value || undefined }); break;
+      case 'aiEnc': socket.emit('ai_encounter', { idea: $('#bdIdea')?.value || '' }); toast('AI กำลังจัดฉากต่อสู้...'); break;
+      case 'auto': socket.emit('board_auto'); break;
+      case 'end': if (confirm('จบการต่อสู้และปิดกระดาน?')) socket.emit('board_end'); break;
+      case 'init': socket.emit('board_initiative'); break;
+      case 'next': socket.emit('board_next'); break;
+      case 'unplace': placing = null; renderBoard(); break;
+      case 'tilt': case 'flat': boardTilt = btn.dataset.bd === 'tilt'; store.set('d20.tilt', boardTilt ? 'tilt' : 'flat'); renderBoard(); break;
+      case 'hp': socket.emit('board_hp', { tokenId: selTok, delta: Number(btn.dataset.d) }); break;
+      case 'remove': socket.emit('board_remove', { tokenId: selTok }); selTok = null; break;
+      case 'attack': {
+        const t = b.tokens.find((k) => k.id === selTok);
+        setTarget(t.id);
+        $('#actionInput').value = `โจมตี ${t.name}`;
+        const atk = S.settings.stats.find((k) => ['พลัง', 'STR'].includes(k));
+        if (atk) $('#actionStat').value = atk;
+        $('#declareBox').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        $('#actionInput').focus();
+        break;
+      }
+      default:
+    }
+  });
 
   // ---------- AVATARS / PROFILES ----------
   function renderProfiles() {

@@ -111,6 +111,7 @@ function mock(kind) {
     case 'review': return { decision: 'roll', dc: 13, stat: '', mode: 'normal', note: 'ลองดู แต่ไม่ง่ายนะ' };
     case 'result': return { narration: 'ผลลัพธ์เป็นไปตามลูกเต๋า เรื่องราวเดินต่อไป...', hp_changes: [], tracker_changes: [{ id: 'bounty', delta: 5 }] };
     case 'answer': return { answer: 'ลองสำรวจรอบๆ ดูก่อน อาจเจอเบาะแส' };
+    case 'encounter': return { terrain: 'beach', enemies: [{ type: 'skeleton' }, { type: 'crab', name: 'ปูเหล็ก' }], objects: ['rock', 'barrel'], intro: 'ศัตรูโผล่ขึ้นมาจากทราย!' };
     case 'goals': return { win: ['หาคัมภีร์ที่หายไป', 'กลับถึงบ้านอย่างปลอดภัย'], lose: ['ทุกคน HP 0'] };
     default: return { narration: 'เสียงบางอย่างดังขึ้นจากความมืด... พวกคุณจะทำอย่างไร?' };
   }
@@ -185,11 +186,23 @@ function worldContext(room) {
   if (room.trackers.length) lines.push(`มาตรวัด (id: ค่า/สูงสุด): ${room.trackers.map((t) => `${t.id} "${t.name}": ${t.value}/${t.max}${t.loseAt !== undefined ? ` (แพ้เมื่อ=${t.loseAt})` : ''}`).join(', ')}`);
   if (room.goals.win.length) lines.push(`เป้าหมายชนะ (id): ${room.goals.win.map((g) => `${g.id} "${g.text}"${g.done ? ' [สำเร็จแล้ว]' : ''}`).join(', ')}`);
   if (room.goals.lose.length) lines.push(`เงื่อนไขแพ้: ${room.goals.lose.map((g) => g.text).join(', ')}`);
+  if (room.board) {
+    const b = room.board;
+    const cur = b.order.length ? b.tokens.find((t) => t.id === b.order[b.turn]) : null;
+    lines.push(`=== ฉากต่อสู้บนกระดาน ${b.cols}x${b.rows} (${b.terrain}) ${cur ? `รอบ ${b.round} ตาของ ${cur.name}` : ''} ===`);
+    lines.push(b.tokens.map((t) => {
+      if (t.kind === 'object') return `${t.name}@(${t.x},${t.y})`;
+      if (t.kind === 'enemy') return `[ศัตรู] ${t.name} HP ${t.hp}/${t.maxHp} @(${t.x},${t.y})`;
+      return `[ลูกเรือ] ${t.name} @(${t.x},${t.y})`;
+    }).join('; '));
+    lines.push('ถ้าผู้เล่นโจมตีศัตรูโดน ให้ลด HP ศัตรูใน enemy_hp_changes (ดาเมจทั่วไป 3-8, สำเร็จขั้นสุดได้มากกว่า)');
+  }
   return `${lines.join('\n')}\n\n`;
 }
 
 const EFFECTS_SCHEMA =
-  '"tracker_changes": [{"id": "id ของมาตรวัด", "delta": ตัวเลข}], "goals_completed": ["id ของเป้าหมายชนะที่เพิ่งสำเร็จ"]';
+  '"tracker_changes": [{"id": "id ของมาตรวัด", "delta": ตัวเลข}], "goals_completed": ["id ของเป้าหมายชนะที่เพิ่งสำเร็จ"], ' +
+  '"enemy_hp_changes": [{"name": "ชื่อศัตรูบนกระดาน", "delta": ตัวเลขติดลบ}]';
 const EFFECTS_RULE =
   ' ถ้าเรื่องที่เล่าทำให้มาตรวัดเปลี่ยน (เช่น ได้เศษแผนที่, ทหารเรือตามล่ามากขึ้น, เรือเสียหาย, ค่าหัวขึ้น) ให้ใส่ใน tracker_changes ' +
   'และถ้าเป้าหมายชนะข้อไหนสำเร็จจริงให้ใส่ใน goals_completed (อย่าใส่ถ้ายังไม่สำเร็จจริง) ';
@@ -199,7 +212,10 @@ function effects(out) {
     ? out.tracker_changes.slice(0, 6).map((t) => ({ id: str(t?.id, 40), delta: clampInt(t?.delta, -10, 10, 0) })).filter((t) => t.id && t.delta)
     : [];
   const goalsCompleted = Array.isArray(out.goals_completed) ? out.goals_completed.slice(0, 5).map((g) => str(g, 20)).filter(Boolean) : [];
-  return { hpChanges: hpList(out.hp_changes), trackerChanges, goalsCompleted };
+  const enemyChanges = Array.isArray(out.enemy_hp_changes)
+    ? out.enemy_hp_changes.slice(0, 8).map((e) => ({ name: str(e?.name, 40), delta: clampInt(e?.delta, -40, 40, 0) })).filter((e) => e.name && e.delta)
+    : [];
+  return { hpChanges: hpList(out.hp_changes), trackerChanges, goalsCompleted, enemyChanges };
 }
 
 function logLine(e) {
@@ -266,6 +282,19 @@ async function continueStory(room, request) {
   return { narration: str(out.narration, 800) || '...', ...effects(out) };
 }
 
+async function planEncounter(room, idea, catalog) {
+  const enemies = Object.entries(catalog.ENEMIES).map(([k, v]) => `${k}=${v.name}(HP ${v.hp})`).join(', ');
+  const objects = Object.entries(catalog.OBJECTS).map(([k, v]) => `${k}=${v}`).join(', ');
+  const out = await ask('encounter', systemPrompt(room),
+    `${context(room)}\n\n${idea ? `ไอเดียจากผู้เล่น: ${idea}\n` : ''}จัดฉากต่อสู้ที่เข้ากับสถานที่ปัจจุบันและระดับความยาก (ง่าย 1-2 ตัว, ปกติ 2-3, ยาก 3-4, นรก 4-5 หรือมีบอส) ` +
+    `ศัตรูที่เลือกได้ (type=ชื่อ): ${enemies}\nสิ่งของที่เลือกได้: ${objects}\nพื้นที่ที่เลือกได้: ${Object.keys(catalog.TERRAINS).join(', ')}\n` +
+    'ตอบ JSON: {"terrain": "พื้นที่", "enemies": [{"type": "type", "name": "ชื่อเฉพาะ (ไม่ใส่ก็ได้)"}], "objects": ["type", "..."], "intro": "บรรยายตอนศัตรูปรากฏตัว 1-2 ประโยค"}');
+  const en = Array.isArray(out.enemies) ? out.enemies.slice(0, 6).map((e) => ({ type: str(e?.type, 20), name: str(e?.name, 30) })).filter((e) => catalog.ENEMIES[e.type]) : [];
+  const ob = Array.isArray(out.objects) ? out.objects.slice(0, 8).map((o) => str(o, 20)).filter((o) => catalog.OBJECTS[o]) : [];
+  if (!en.length) throw new AIError('bad_output', 'AI จัดศัตรูไม่สำเร็จ ลองใหม่อีกครั้ง');
+  return { terrain: catalog.TERRAINS[out.terrain] ? out.terrain : '', enemies: en, objects: ob, intro: str(out.intro, 400) };
+}
+
 async function writeGoals(room, idea) {
   const out = await ask('goals', systemPrompt(room),
     `${context(room)}\n\n${idea ? `ไอเดียจากผู้เล่น: ${idea}\n` : ''}เขียนเป้าหมายของเกมนี้ให้ชัดเจนและวัดผลได้: เป้าหมายชนะ 2-4 ข้อ (ต้องทำครบทุกข้อถึงชนะ) และเงื่อนไขแพ้ 2-3 ข้อ ` +
@@ -310,4 +339,4 @@ async function check() {
 }
 
 module.exports = {
-  check, available, setProvider, writeGoals, newScene, reviewAction, narrateResult, answerQuestion, continueStory, AIError, gemini, _setFetch: (f) => (global.fetch = f) };
+  check, available, setProvider, writeGoals, planEncounter, newScene, reviewAction, narrateResult, answerQuestion, continueStory, AIError, gemini, _setFetch: (f) => (global.fetch = f) };
